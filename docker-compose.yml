@@ -11,12 +11,7 @@ services:
       AGENT_SERVER_BIND_HOST: 0.0.0.0
       AGENT_SERVER_PORT: "8088"
       DAOLIYU_BASE_URLS: http://host.docker.internal:5173,https://daoliyu.xuguopeng.com
-      DAOLIYU_USERNAME: ""
-      DAOLIYU_PASSWORD: ""
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - agent_server_data:/data
-
-volumes:
-  agent_server_data:
+      - /volume1/docker/personal-os-agent/data:/data

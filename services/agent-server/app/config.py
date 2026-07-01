@@ -30,7 +30,7 @@ def get_settings() -> Settings:
 
     def value(key: str, default: str = "") -> str:
         env_value = getenv(key)
-        if env_value is not None:
+        if env_value:
             return env_value
         return file_values.get(key, default)
 

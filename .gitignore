@@ -22,7 +22,12 @@ venv/
 *.sqlite
 *.sqlite3
 *.db
-data/
+data/*
+!data/
+!data/README.md
+!data/secrets/
+!data/secrets/daoliyu.env.example
+data/secrets/*.env
 
 # Superpowers local runtime state
 .superpowers/**/state/
