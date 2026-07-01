@@ -38,3 +38,34 @@ Environment variables:
 - `AGENT_SERVER_BIND_HOST`: bind host, default `0.0.0.0`.
 - `AGENT_SERVER_PORT`: service port, default `8088`.
 - `AGENT_SERVER_TOKEN`: optional bearer token placeholder for later authentication.
+- `DAOLIYU_BASE_URL`: Daoliyu music service base URL, default `http://127.0.0.1:5173`.
+
+## Daoliyu Music Proxy
+
+The server exposes the NAS music service through `/v1/music`.
+
+Examples:
+
+```bash
+curl http://127.0.0.1:8088/v1/music/status
+curl http://127.0.0.1:8088/v1/music/endpoints
+curl http://127.0.0.1:8088/v1/music/api/auth/bootstrap
+curl -X POST http://127.0.0.1:8088/v1/music/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+```
+
+Authenticated Daoliyu calls should pass the Daoliyu token through:
+
+```bash
+curl http://127.0.0.1:8088/v1/music/api/tracks \
+  -H "Authorization: Bearer <daoliyu-token>"
+```
+
+When running in Docker on Linux NAS, `docker-compose.yml` defaults to:
+
+```text
+DAOLIYU_BASE_URL=http://host.docker.internal:5173
+```
+
+If Daoliyu runs as another container, set `DAOLIYU_BASE_URL` to that service URL.

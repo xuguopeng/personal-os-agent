@@ -21,8 +21,10 @@ from .repository import (
     scan_default_assets,
     scan_default_skills,
 )
+from .music import router as music_router
 
 app = FastAPI(title="Personal OS Agent Server", version="0.1.0")
+app.include_router(music_router)
 active_connections: dict[str, WebSocket] = {}
 
 
