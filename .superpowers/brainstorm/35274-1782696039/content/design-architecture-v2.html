@@ -1,0 +1,53 @@
+<h2>正式设计 1/5：整体架构（调整后）</h2>
+<p class="subtitle">上半区是工作台和聊天，下半区是可展开的流程日志。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Personal OS v1 - Resizable Layout</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-rows:minmax(300px,1fr) auto;gap:12px;min-height:430px">
+      <div style="display:grid;grid-template-columns:minmax(280px,1fr) 10px minmax(280px,1fr);gap:10px">
+        <div class="mock-content">
+          <div class="label">Workspace</div>
+          <div class="mock-nav">小说 | 音乐 | 博客 | 更多</div>
+          <div class="placeholder" style="height:210px;margin-top:12px">当前模块工作台</div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="mock-button">新建</button>
+            <button class="mock-button">保存</button>
+            <button class="mock-button">导出</button>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;background:#e5e7eb;border-radius:6px;color:#6b7280">↔</div>
+        <div class="mock-content">
+          <div class="label">Agent Chat</div>
+          <div class="placeholder" style="height:210px">聊天区：自然语言 + @模块命令</div>
+          <div class="mock-input" style="margin-top:12px">@小说 新建一个男频开头</div>
+        </div>
+      </div>
+
+      <div class="mock-content">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div class="label">Process Log Accordion</div>
+            <div>当前任务：读取记忆 → 选择 skill/MCP → 调用模块 → 保存结果</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="mock-button">收起</button>
+            <button class="mock-button">半高</button>
+            <button class="mock-button">放大</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">
+          <div class="placeholder" style="height:48px">意图</div>
+          <div class="placeholder" style="height:48px">记忆</div>
+          <div class="placeholder" style="height:48px">工具</div>
+          <div class="placeholder" style="height:48px">结果</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>布局规则</h3>
+  <p>工作台和聊天默认各占一半。拖动分隔条时，左侧变小右侧就变大，右侧变小左侧就变大；两边都有最小宽度。底部日志默认收起或半高，执行任务时自动展开到合适高度，用户可以手动放大查看完整过程。</p>
+</div>

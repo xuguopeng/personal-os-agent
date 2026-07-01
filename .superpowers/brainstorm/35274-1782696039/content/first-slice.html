@@ -1,0 +1,78 @@
+<h2>第一版先切哪一层？</h2>
+<p class="subtitle">目标不是缩小愿望，而是先做出一个能每天使用、能持续扩展的核心系统。</p>
+
+<div class="cards">
+  <div class="card" data-choice="agent-hub" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Agent Hub</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:260px 1fr;gap:12px;min-height:260px">
+            <div class="mock-sidebar">
+              <div>小说</div>
+              <div>漫画</div>
+              <div>表情包</div>
+              <div>音乐</div>
+              <div>视频</div>
+            </div>
+            <div class="mock-content">
+              <div class="placeholder">聊天控制台</div>
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <button class="mock-button">写一章小说</button>
+                <button class="mock-button">播放音乐</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 先做 Agent 总控台</h3>
+      <p>一个聊天入口，能识别意图、打开模块、传递任务。小说/音乐等模块先做最小可用版。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="creator-suite" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Creator Suite</div>
+        <div class="mockup-body">
+          <div class="mock-nav">小说 | 漫画 | 表情包 | 视频</div>
+          <div class="placeholder" style="height:155px;margin-top:12px">创作工作区</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px">
+            <button class="mock-button">生成大纲</button>
+            <button class="mock-button">分镜</button>
+            <button class="mock-button">导出</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 先做创作套件</h3>
+      <p>优先把小说、漫画、表情包、视频串成生产流程，Agent 先作为辅助输入。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="personal-os" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Personal OS</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <div class="placeholder">博客</div>
+            <div class="placeholder">音乐</div>
+            <div class="placeholder">视频</div>
+            <div class="placeholder">小说</div>
+            <div class="placeholder">漫画</div>
+            <div class="placeholder">画布</div>
+          </div>
+          <div class="mock-input" style="margin-top:12px">今天想做什么？</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 先做个人 OS 壳</h3>
+      <p>先搭建所有模块的入口、布局、资料库和插件机制，再逐步补各模块能力。</p>
+    </div>
+  </div>
+</div>

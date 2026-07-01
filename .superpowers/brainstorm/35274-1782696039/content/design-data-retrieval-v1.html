@@ -1,0 +1,43 @@
+<h2>补充设计：数据分层和检索路径</h2>
+<p class="subtitle">数据多了以后，Agent 不能把所有内容都读进上下文；它要先过滤，再检索，再控制 token。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Agent Retrieval Pipeline</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="mock-content">
+        <div class="label">Knowledge Base</div>
+        <div class="placeholder" style="height:58px">项目文档 / 小说设定 / 博客素材</div>
+        <div class="placeholder" style="height:58px;margin-top:8px">标签 / 项目 / 模块 / 全文搜索</div>
+        <div class="placeholder" style="height:58px;margin-top:8px">向量索引：语义查找资料</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">Memory Base</div>
+        <div class="placeholder" style="height:58px">创作偏好 / 工作习惯 / 娱乐偏好</div>
+        <div class="placeholder" style="height:58px;margin-top:8px">可查看 / 可编辑 / 可禁用 / 可删除</div>
+        <div class="placeholder" style="height:58px;margin-top:8px">调用时显示用了哪些记忆</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">Task Log</div>
+        <div class="placeholder" style="height:58px">任务步骤 / MCP / skill / 模块工具</div>
+        <div class="placeholder" style="height:58px;margin-top:8px">耗时 / token / 输入输出摘要</div>
+        <div class="placeholder" style="height:58px;margin-top:8px">默认不进上下文，只按需查最近摘要</div>
+      </div>
+    </div>
+
+    <div style="margin:14px 0;text-align:center;color:#6b7280">意图识别 → 模块/项目/标签过滤 → 全文搜索 → 向量搜索 → Top-K 摘要 → token 预算 → Agent 回复</div>
+
+    <div class="mock-content">
+      <div class="label">AI Config</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="placeholder" style="height:58px">聊天模型：对话、规划、生成草稿</div>
+        <div class="placeholder" style="height:58px">Embedding 模型：生成向量，用于语义搜索</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>关键结论</h3>
+  <p>向量索引需要配置 embedding AI，但搜索系统不能完全依赖它。没有 embedding 时，标签、项目、模块和全文搜索仍然可用；配置 embedding 后，Agent 才能更聪明地做语义检索。</p>
+</div>

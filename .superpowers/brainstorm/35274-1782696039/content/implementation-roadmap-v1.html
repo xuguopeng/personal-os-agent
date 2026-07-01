@@ -1,0 +1,68 @@
+<h2>实施路线图</h2>
+<p class="subtitle">第一版先把 Personal OS 的底座跑起来，再逐步接 Agent、记忆、模块和发布渠道。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Build Order</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+      <div class="mock-content">
+        <div class="label">1</div>
+        <div>项目骨架</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">Tauri 2 + React + shadcn/ui</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">2</div>
+        <div>主布局</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">工作台 / 聊天 / 底部日志</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">3</div>
+        <div>本地数据</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">知识 / 记忆 / 日志 / 设置</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">4</div>
+        <div>AI 配置</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">聊天 / Embedding / 预留图像视频</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">5</div>
+        <div>Agent 调度</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">@模块 / 任务草稿 / 确认</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px">
+      <div class="mock-content">
+        <div class="label">6</div>
+        <div>工具注册表</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">MCP / skills / 模块工具</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">7</div>
+        <div>知识和记忆</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">检索 / 候选记忆 / token 控制</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">8</div>
+        <div>三大模块</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">小说 / 音乐 / 博客</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">9</div>
+        <div>发布渠道</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">个人网站 / 公众号 / 手动记录</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">10</div>
+        <div>备份和健康</div>
+        <div class="placeholder" style="height:54px;margin-top:8px">导入导出 / 索引状态</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>第一个可运行检查点</h3>
+  <p>先做一个能启动的桌面 app：主壳、可拖动布局、底部日志、设置页、AI 配置页、空模块页、本地数据库初始化。这个检查点不需要真实调用 AI。</p>
+</div>

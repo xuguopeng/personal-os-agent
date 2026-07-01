@@ -1,0 +1,92 @@
+<h2>个人 OS 的架构方向</h2>
+<p class="subtitle">三种方式都能做出来，差别在于第一版重心放在“聊天体验”“模块工作台”还是“流程透明”。</p>
+
+<div class="cards">
+  <div class="card" data-choice="chat-first" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. Chat First</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr 240px;gap:12px;min-height:260px">
+            <div class="mock-content">
+              <div class="placeholder" style="height:185px">主聊天区</div>
+              <div class="mock-input" style="margin-top:12px">@小说 写一章都市小说</div>
+            </div>
+            <div class="mock-sidebar">
+              <div>记忆</div>
+              <div>工具调用</div>
+              <div>模块卡片</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 聊天优先</h3>
+      <p>聊天是唯一主入口，模块都像聊天里的工具卡片。上手快，但复杂工作流容易藏在对话里。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="workspace-first" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. Workspace First</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:220px 1fr 260px;gap:12px;min-height:260px">
+            <div class="mock-sidebar">
+              <div>小说</div>
+              <div>音乐</div>
+              <div>博客</div>
+              <div>记忆库</div>
+            </div>
+            <div class="mock-content">
+              <div class="placeholder" style="height:195px">当前模块工作台</div>
+            </div>
+            <div class="mock-sidebar">
+              <div>Agent</div>
+              <div>建议动作</div>
+              <div>上下文</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 模块工作台优先</h3>
+      <p>每个模块都有完整页面，Agent 常驻侧边辅助。适合长期扩展，但第一版的 Agent 感可能弱一点。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="orchestrator" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. Observable Orchestrator</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:240px 1fr 280px;gap:12px;min-height:260px">
+            <div class="mock-sidebar">
+              <div>小说</div>
+              <div>音乐</div>
+              <div>博客</div>
+              <div>MCP</div>
+              <div>Skills</div>
+            </div>
+            <div class="mock-content">
+              <div class="placeholder" style="height:140px">聊天 + @模块命令</div>
+              <div class="placeholder" style="height:44px;margin-top:10px">任务草稿 / 待确认动作</div>
+            </div>
+            <div class="mock-sidebar">
+              <div>流程步骤</div>
+              <div>工具调用</div>
+              <div>输入输出</div>
+              <div>保存记录</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 可观察调度器</h3>
+      <p>聊天、模块、日志三者并重。最符合“我用了什么、流程是什么、结果在哪都看得见”。</p>
+    </div>
+  </div>
+</div>

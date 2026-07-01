@@ -1,0 +1,46 @@
+<h2>正式设计 1/5：整体架构</h2>
+<p class="subtitle">第一版是一个本地优先的 Personal OS，核心是“可观察的 Agent 调度器”。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Personal OS v1</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:220px 1fr 300px;gap:12px;min-height:360px">
+      <div class="mock-sidebar">
+        <div class="label">Modules</div>
+        <div>小说工作台</div>
+        <div>音乐播放器</div>
+        <div>博客记录</div>
+        <div style="opacity:.55">漫画入口</div>
+        <div style="opacity:.55">表情包入口</div>
+        <div style="opacity:.55">无限画布入口</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">Agent Command Center</div>
+        <div class="placeholder" style="height:120px">聊天区：自然语言 + @模块命令</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+          <div class="placeholder" style="height:72px">任务草稿</div>
+          <div class="placeholder" style="height:72px">待确认动作</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px">
+          <button class="mock-button">@小说</button>
+          <button class="mock-button">@音乐</button>
+          <button class="mock-button">@博客</button>
+        </div>
+      </div>
+      <div class="mock-sidebar">
+        <div class="label">Visible Process</div>
+        <div>1. 识别意图</div>
+        <div>2. 读取相关记忆</div>
+        <div>3. 选择 skill / MCP</div>
+        <div>4. 调用模块工具</div>
+        <div>5. 生成结果</div>
+        <div>6. 写入日志和记忆候选</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>核心原则</h3>
+  <p>应用不是“很多页面堆在一起”，而是一个本地桌面个人系统：聊天负责表达意图，模块负责具体工作，右侧流程日志负责把 Agent 的思考和工具调用变成可追踪记录。</p>
+</div>

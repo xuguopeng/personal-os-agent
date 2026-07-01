@@ -1,0 +1,44 @@
+<h2>正式设计 2/5：记忆系统</h2>
+<p class="subtitle">目标是让 Agent 越来越懂你，同时让你完全知道它记住了什么。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Memory Center</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:220px 1fr 280px;gap:12px;min-height:390px">
+      <div class="mock-sidebar">
+        <div class="label">Memory Types</div>
+        <div>创作偏好</div>
+        <div>工作方式</div>
+        <div>生活娱乐</div>
+        <div>项目上下文</div>
+        <div>人物/品牌设定</div>
+        <div>禁用记忆</div>
+      </div>
+      <div class="mock-content">
+        <div class="label">可查看、可编辑、可删除</div>
+        <div class="placeholder" style="height:70px">你偏好男频小说开头：强冲突、快节奏、前三章给金手指。</div>
+        <div class="placeholder" style="height:70px;margin-top:10px">你的个人品牌语气：真实、生活化、有一点自嘲，不端着。</div>
+        <div class="placeholder" style="height:70px;margin-top:10px">音乐偏好：工作时更适合轻音乐/老歌，避免太吵。</div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="mock-button">编辑</button>
+          <button class="mock-button">禁用</button>
+          <button class="mock-button">删除</button>
+          <button class="mock-button">导出备份</button>
+        </div>
+      </div>
+      <div class="mock-sidebar">
+        <div class="label">Learning Flow</div>
+        <div>1. 从聊天/操作中发现候选记忆</div>
+        <div>2. 标记来源和可信度</div>
+        <div>3. 进入待确认队列</div>
+        <div>4. 你确认后写入长期记忆</div>
+        <div>5. 调用时展示“用了哪些记忆”</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>记忆规则</h3>
+  <p>第一版默认不悄悄写入长期记忆。Agent 可以提出“我是否要记住这个偏好？”，你确认后才保存。每条记忆都有类型、内容、来源、创建时间、更新时间、可信度、启用状态。记忆本地保存，并支持手动导出/导入备份。</p>
+</div>

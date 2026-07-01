@@ -1,0 +1,17 @@
+services:
+  agent-server:
+    build:
+      context: ./services/agent-server
+    container_name: personal-os-agent-server
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      AGENT_SERVER_DB_PATH: /data/personal-os-agent-server.sqlite3
+      AGENT_SERVER_BIND_HOST: 0.0.0.0
+      AGENT_SERVER_PORT: "8088"
+    volumes:
+      - agent_server_data:/data
+
+volumes:
+  agent_server_data:

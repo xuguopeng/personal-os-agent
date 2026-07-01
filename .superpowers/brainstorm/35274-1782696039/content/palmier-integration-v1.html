@@ -1,0 +1,35 @@
+<h2>Palmier Pro 集成方案</h2>
+<p class="subtitle">推荐先用 MCP 外部调用，不直接把 Swift 视频编辑器源码导入 Tauri 项目。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Chat-controlled Video Editing</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="mock-content">
+        <div class="label">Personal OS</div>
+        <div class="placeholder" style="height:64px">聊天：@视频 剪掉停顿并加字幕</div>
+        <div class="placeholder" style="height:64px;margin-top:8px">视频画布模块：连接状态 / 项目摘要</div>
+        <div class="placeholder" style="height:64px;margin-top:8px">底部日志：每一步可展开</div>
+      </div>
+
+      <div class="mock-content">
+        <div class="label">MCP Bridge</div>
+        <div class="placeholder" style="height:64px">连接 http://127.0.0.1:19789/mcp</div>
+        <div class="placeholder" style="height:64px;margin-top:8px">列出工具：timeline / media / generate / export</div>
+        <div class="placeholder" style="height:64px;margin-top:8px">确认后执行剪辑动作</div>
+      </div>
+
+      <div class="mock-content">
+        <div class="label">Palmier Pro</div>
+        <div class="placeholder" style="height:64px">Swift 原生视频编辑器</div>
+        <div class="placeholder" style="height:64px;margin-top:8px">时间线 / 字幕 / 转写 / 搜索 / 导出</div>
+        <div class="placeholder" style="height:64px;margin-top:8px">AI 生成需登录和 credits</div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px" class="mock-content">
+      <div class="label">关键判断</div>
+      <div>直接导入源码风险高：Swift + macOS 26 + GPLv3 + 生成 AI 非完全开源。MCP 调用更适合当前 Personal OS 架构。</div>
+    </div>
+  </div>
+</div>
