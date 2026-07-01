@@ -43,6 +43,23 @@ Environment variables:
 - `DAOLIYU_USERNAME`: optional Daoliyu login email/username for server-side login.
 - `DAOLIYU_PASSWORD`: optional Daoliyu password for server-side login. Do not commit this value.
 
+Secret files:
+
+If the NAS UI cannot add environment variables after container creation, create either of these files inside the data volume:
+
+- `/data/secrets/agent-server.env`
+- `/data/secrets/daoliyu.env`
+
+Example:
+
+```env
+DAOLIYU_USERNAME=your-email@example.com
+DAOLIYU_PASSWORD=your-password
+DAOLIYU_BASE_URLS=http://host.docker.internal:5173,https://daoliyu.xuguopeng.com
+```
+
+Real environment variables override values from these files.
+
 ## Daoliyu Music Proxy
 
 The server exposes the NAS music service through `/v1/music`.

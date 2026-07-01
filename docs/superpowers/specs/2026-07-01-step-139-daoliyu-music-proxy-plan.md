@@ -57,6 +57,29 @@ DAOLIYU_PASSWORD=<你的密码>
 
 `DAOLIYU_USERNAME` 可以填写 Daoliyu 登录邮箱。服务端登录时会同时发送 `email` 和 `username` 字段，以适配真实接口。
 
+如果 NAS 图形界面不方便新增环境变量，也可以创建文件：
+
+```text
+/data/secrets/daoliyu.env
+```
+
+内容示例：
+
+```env
+DAOLIYU_USERNAME=<你的账号>
+DAOLIYU_PASSWORD=<你的密码>
+DAOLIYU_BASE_URLS=http://host.docker.internal:5173,https://daoliyu.xuguopeng.com
+```
+
+服务端启动时读取顺序：
+
+1. 系统环境变量优先。
+2. `/data/secrets/agent-server.env`
+3. `/data/secrets/daoliyu.env`
+4. 本地开发 fallback：`./data/secrets/*.env`
+
+`/v1/music/auth/status` 会返回 `secretFilesLoaded` 数量，用来确认密钥文件是否被读到，但不会返回文件内容。
+
 登录流程：
 
 1. 调用 `POST /v1/music/auth/login`。

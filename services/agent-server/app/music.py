@@ -211,6 +211,7 @@ async def daoliyu_auth_status() -> dict[str, Any]:
             "configured": bool(
                 get_settings().daoliyu_username and get_settings().daoliyu_password
             ),
+            "secretFilesLoaded": len(get_settings().loaded_secret_files),
             "baseUrl": "",
             "user": None,
             "message": "尚未登录倒流音乐服务。",
@@ -408,6 +409,7 @@ def safe_auth_status(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": result.get("status", "unknown"),
         "configured": bool(get_settings().daoliyu_username and get_settings().daoliyu_password),
+        "secretFilesLoaded": len(get_settings().loaded_secret_files),
         "baseUrl": result.get("baseUrl") or DAOLIYU_TOKEN_CACHE.get("baseUrl") or "",
         "user": result.get("user") or DAOLIYU_TOKEN_CACHE.get("user"),
         "message": result.get("message", ""),
