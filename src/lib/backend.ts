@@ -283,6 +283,23 @@ export type NasServerStatus = {
   database: string | null;
 };
 
+export type DaoliyuAuthStatus = {
+  status: "authenticated" | "not_authenticated" | "not_configured" | "error" | "unknown";
+  configured: boolean;
+  secretFilesLoaded: number;
+  baseUrl: string;
+  user: Record<string, unknown> | null;
+  message: string;
+};
+
+export type MusicOverview = {
+  auth: DaoliyuAuthStatus;
+  player: unknown;
+  tracks: unknown;
+  playlists: unknown;
+  fetchedAt: string;
+};
+
 export type CapabilityType = "mcp" | "skill";
 export type CapabilityRiskLevel = "low" | "medium" | "high";
 export type CapabilityConfirmPolicy = "always" | "when_risky" | "never";
@@ -2166,6 +2183,69 @@ export async function checkNasServer(serverUrl: string): Promise<NasServerStatus
   }
 }
 
+export async function getDaoliyuAuthStatus(serverUrl?: string): Promise<DaoliyuAuthStatus> {
+  const baseUrl = serverUrl ? normalizeServerUrl(serverUrl) : (await getNasServerConfig()).serverUrl;
+  try {
+    const response = await fetch(`${baseUrl}/v1/music/auth/status`);
+    if (!response.ok) {
+      return {
+        status: "error",
+        configured: false,
+        secretFilesLoaded: 0,
+        baseUrl: "",
+        user: null,
+        message: `Daoliyu 登录状态返回 HTTP ${response.status}`,
+      };
+    }
+    return normalizeDaoliyuAuthStatus(await response.json());
+  } catch (error) {
+    return {
+      status: "error",
+      configured: false,
+      secretFilesLoaded: 0,
+      baseUrl: "",
+      user: null,
+      message: `读取 Daoliyu 登录状态失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export async function loginDaoliyu(serverUrl?: string): Promise<DaoliyuAuthStatus> {
+  const baseUrl = serverUrl ? normalizeServerUrl(serverUrl) : (await getNasServerConfig()).serverUrl;
+  try {
+    const response = await fetch(`${baseUrl}/v1/music/auth/login`, {
+      method: "POST",
+    });
+    return normalizeDaoliyuAuthStatus(await response.json());
+  } catch (error) {
+    return {
+      status: "error",
+      configured: false,
+      secretFilesLoaded: 0,
+      baseUrl: "",
+      user: null,
+      message: `Daoliyu 登录失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export async function getMusicOverview(serverUrl?: string): Promise<MusicOverview> {
+  const baseUrl = serverUrl ? normalizeServerUrl(serverUrl) : (await getNasServerConfig()).serverUrl;
+  const [auth, player, tracks, playlists] = await Promise.all([
+    getDaoliyuAuthStatus(baseUrl),
+    fetchNasJson(`${baseUrl}/v1/music/api/player`),
+    fetchNasJson(`${baseUrl}/v1/music/api/tracks?limit=8`),
+    fetchNasJson(`${baseUrl}/v1/music/api/playlists`),
+  ]);
+  return {
+    auth,
+    player,
+    tracks,
+    playlists,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 export async function listExternalAssets(moduleKey?: string): Promise<ExternalAsset[]> {
   if (isTauriRuntime()) {
     return await invoke<ExternalAsset[]>("list_external_assets", {
@@ -2431,6 +2511,50 @@ function normalizeServerUrl(value: string) {
     throw new Error("NAS 服务地址必须以 http:// 或 https:// 开头");
   }
   return normalized;
+}
+
+function normalizeDaoliyuAuthStatus(input: unknown): DaoliyuAuthStatus {
+  const value = isRecord(input) ? input : {};
+  const status = String(value.status ?? "unknown") as DaoliyuAuthStatus["status"];
+  return {
+    status,
+    configured: Boolean(value.configured),
+    secretFilesLoaded: Number(value.secretFilesLoaded ?? 0),
+    baseUrl: String(value.baseUrl ?? ""),
+    user: isRecord(value.user) ? value.user : null,
+    message: String(value.message ?? ""),
+  };
+}
+
+async function fetchNasJson(url: string): Promise<unknown> {
+  try {
+    const response = await fetch(url);
+    const text = await response.text();
+    let body: unknown = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = text;
+    }
+    if (!response.ok) {
+      return {
+        status: "error",
+        httpStatus: response.status,
+        message: typeof body === "string" ? body : `HTTP ${response.status}`,
+        body,
+      };
+    }
+    return body;
+  } catch (error) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function cleanChatSessionTitle(title?: string) {

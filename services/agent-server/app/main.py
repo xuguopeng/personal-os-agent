@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .db import db, initialize_database
@@ -24,6 +25,13 @@ from .repository import (
 from .music import router as music_router
 
 app = FastAPI(title="Personal OS Agent Server", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=False,
+    allow_headers=["*"],
+    allow_methods=["*"],
+    allow_origins=["*"],
+)
 app.include_router(music_router)
 active_connections: dict[str, WebSocket] = {}
 

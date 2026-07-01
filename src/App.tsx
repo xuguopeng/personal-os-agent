@@ -1,4 +1,12 @@
-import { FormEvent, PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  PointerEvent,
+  ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   BookOpen,
   Bot,
@@ -53,6 +61,7 @@ import {
   MemoryCandidateType,
   MemoryItem,
   MemoryItemFilters,
+  MusicOverview,
   NasServerConfig,
   NasServerStatus,
   PalmierMcpStatus,
@@ -87,7 +96,9 @@ import {
   deleteSecret,
   getBootstrapState,
   getMemorySourceContext,
+  getMusicOverview,
   getNasServerConfig,
+  loginDaoliyu,
   listAiModelProfiles,
   listChatMessages,
   listChatSessions,
@@ -433,6 +444,8 @@ function App() {
     service: null,
     database: null,
   });
+  const [musicOverview, setMusicOverview] = useState<MusicOverview | null>(null);
+  const [musicError, setMusicError] = useState<string | null>(null);
   const [publishingChannels, setPublishingChannels] = useState<
     PublishingChannel[]
   >([]);
@@ -470,6 +483,7 @@ function App() {
     refreshMemoryCandidates();
     refreshPalmierStatus();
     refreshNasConfig();
+    refreshMusicOverview();
   }, []);
 
   const refreshBootstrap = async () => {
@@ -612,6 +626,27 @@ function App() {
     setNasConfig(config);
     const status = await checkNasServer(config.serverUrl);
     setNasStatus(status);
+    await refreshMusicOverview(config.serverUrl);
+  };
+
+  const refreshMusicOverview = async (serverUrl = nasConfig.serverUrl) => {
+    setMusicError(null);
+    try {
+      setMusicOverview(await getMusicOverview(serverUrl));
+    } catch (error: unknown) {
+      setMusicError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const loginAndRefreshDaoliyu = async () => {
+    setMusicError(null);
+    try {
+      const auth = await loginDaoliyu(nasConfig.serverUrl);
+      const overview = await getMusicOverview(nasConfig.serverUrl);
+      setMusicOverview({ ...overview, auth });
+    } catch (error: unknown) {
+      setMusicError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const focusTaskSession = async (sessionId: string) => {
@@ -2411,6 +2446,8 @@ function App() {
                 memoryItems={memoryItems}
                 memoryFilters={memoryFilters}
                 memoryCandidates={memoryCandidates}
+                musicError={musicError}
+                musicOverview={musicOverview}
                 moduleKey={activeModule}
                 nasConfig={nasConfig}
                 nasStatus={nasStatus}
@@ -2433,6 +2470,8 @@ function App() {
                 onMemoryToggle={toggleMemoryItem}
                 onModuleAction={runWorkspaceAction}
                 onMemoryCandidatesChange={refreshMemoryCandidates}
+                onMusicLogin={loginAndRefreshDaoliyu}
+                onMusicRefresh={refreshMusicOverview}
                 onNasSaveAndCheck={saveAndCheckNasServer}
                 onTaskSessionFocus={focusTaskSession}
                 onPalmierCheck={refreshPalmierStatus}
@@ -2564,6 +2603,8 @@ function Workspace({
   memoryItems,
   memoryFilters,
   memoryCandidates,
+  musicError,
+  musicOverview,
   moduleKey,
   nasConfig,
   nasStatus,
@@ -2586,6 +2627,8 @@ function Workspace({
   onMemoryToggle,
   onModuleAction,
   onMemoryCandidatesChange,
+  onMusicLogin,
+  onMusicRefresh,
   onNasSaveAndCheck,
   onTaskSessionFocus,
   onPalmierCheck,
@@ -2605,6 +2648,8 @@ function Workspace({
   memoryItems: MemoryItem[];
   memoryFilters: MemoryItemFilters;
   memoryCandidates: MemoryCandidate[];
+  musicError: string | null;
+  musicOverview: MusicOverview | null;
   moduleKey: ModuleKey;
   nasConfig: NasServerConfig;
   nasStatus: NasServerStatus;
@@ -2633,11 +2678,24 @@ function Workspace({
   onMemoryToggle: (memory: MemoryItem) => Promise<void>;
   onModuleAction: (module: ModuleKey, action: WorkspaceAction) => Promise<void>;
   onMemoryCandidatesChange: () => Promise<void>;
+  onMusicLogin: () => Promise<void>;
+  onMusicRefresh: () => Promise<void>;
   onNasSaveAndCheck: (serverUrl: string) => Promise<void>;
   onTaskSessionFocus: (sessionId: string) => Promise<void>;
   onPalmierCheck: () => Promise<void>;
   palmierStatus: PalmierMcpStatus;
 }) {
+  if (moduleKey === "music") {
+    return (
+      <MusicWorkspace
+        error={musicError}
+        onLogin={onMusicLogin}
+        onRefresh={onMusicRefresh}
+        overview={musicOverview}
+      />
+    );
+  }
+
   if (moduleKey === "video") {
     return (
       <div className="space-y-4 p-4">
@@ -3090,6 +3148,212 @@ function InfoPill({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
+}
+
+function MusicWorkspace({
+  error,
+  onLogin,
+  onRefresh,
+  overview,
+}: {
+  error: string | null;
+  onLogin: () => Promise<void>;
+  onRefresh: () => Promise<void>;
+  overview: MusicOverview | null;
+}) {
+  const [busyAction, setBusyAction] = useState<"login" | "refresh" | null>(null);
+  const auth = overview?.auth;
+  const user = auth?.user;
+  const userLabel =
+    typeof user?.displayName === "string"
+      ? user.displayName
+      : typeof user?.email === "string"
+        ? user.email
+        : "未登录";
+  const player = isRecord(overview?.player) ? overview?.player : null;
+  const trackItems = extractCollectionItems(overview?.tracks).slice(0, 8);
+  const playlistItems = extractCollectionItems(overview?.playlists).slice(0, 6);
+
+  const runAction = async (action: "login" | "refresh") => {
+    setBusyAction(action);
+    try {
+      if (action === "login") {
+        await onLogin();
+      } else {
+        await onRefresh();
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4 p-4">
+      <Toolbar moduleKey="music" onAction={async () => undefined} title="音乐工作台" />
+      <div className="grid gap-3 md:grid-cols-4">
+        <StatusCard
+          icon={Music}
+          label="Daoliyu 登录"
+          note={auth?.message || "从 NAS Agent Server 读取登录状态"}
+          value={daoliyuAuthLabel(auth?.status ?? "unknown")}
+        />
+        <StatusCard
+          icon={Database}
+          label="密钥文件"
+          note="读取 /data/secrets/*.env"
+          value={String(auth?.secretFilesLoaded ?? 0)}
+        />
+        <StatusCard
+          icon={RadioTower}
+          label="当前上游"
+          note="优先本机 5173，失败再走公网"
+          value={auth?.baseUrl ? compactUrl(auth.baseUrl) : "未连接"}
+        />
+        <StatusCard
+          icon={Bot}
+          label="用户"
+          note={typeof user?.email === "string" ? user.email : "服务端托管登录"}
+          value={userLabel}
+        />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          disabled={busyAction !== null}
+          onClick={() => runAction("refresh")}
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw className={`h-4 w-4 ${busyAction === "refresh" ? "animate-spin" : ""}`} />
+          刷新音乐状态
+        </Button>
+        <Button
+          disabled={busyAction !== null}
+          onClick={() => runAction("login")}
+          type="button"
+        >
+          <KeyRound className="h-4 w-4" />
+          服务端登录
+        </Button>
+      </div>
+      {error && (
+        <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+          {error}
+        </div>
+      )}
+      <div className="grid gap-3 xl:grid-cols-3">
+        <MusicPanel title="播放器状态">
+          <JsonSummary value={player ?? overview?.player ?? null} />
+        </MusicPanel>
+        <MusicPanel title="曲目预览">
+          <MusicItemList empty="还没有读到曲目" items={trackItems} />
+        </MusicPanel>
+        <MusicPanel title="歌单预览">
+          <MusicItemList empty="还没有读到歌单" items={playlistItems} />
+        </MusicPanel>
+      </div>
+    </div>
+  );
+}
+
+function MusicPanel({
+  children,
+  title,
+}: {
+  children: ReactNode;
+  title: string;
+}) {
+  return (
+    <div className="rounded-md border border-zinc-200 bg-white">
+      <div className="border-b border-zinc-200 px-3 py-2 text-sm font-semibold">
+        {title}
+      </div>
+      <div className="p-3">{children}</div>
+    </div>
+  );
+}
+
+function MusicItemList({
+  empty,
+  items,
+}: {
+  empty: string;
+  items: Record<string, unknown>[];
+}) {
+  if (items.length === 0) {
+    return <div className="text-sm text-zinc-500">{empty}</div>;
+  }
+  return (
+    <div className="space-y-2">
+      {items.map((item, index) => (
+        <div
+          className="rounded border border-zinc-100 bg-zinc-50 px-3 py-2"
+          key={String(item.id ?? item.name ?? item.title ?? index)}
+        >
+          <div className="truncate text-sm font-medium text-zinc-800">
+            {musicItemTitle(item)}
+          </div>
+          <div className="mt-1 truncate text-xs text-zinc-500">
+            {musicItemSubtitle(item)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function JsonSummary({ value }: { value: unknown }) {
+  if (!value) {
+    return <div className="text-sm text-zinc-500">暂无数据</div>;
+  }
+  return (
+    <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-zinc-50 p-3 text-xs text-zinc-600">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function extractCollectionItems(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.filter(isRecord);
+  if (!isRecord(value)) return [];
+  for (const key of ["items", "data", "results", "tracks", "playlists"]) {
+    const candidate = value[key];
+    if (Array.isArray(candidate)) return candidate.filter(isRecord);
+  }
+  return [];
+}
+
+function musicItemTitle(item: Record<string, unknown>) {
+  return String(item.title ?? item.name ?? item.album ?? item.id ?? "未命名");
+}
+
+function musicItemSubtitle(item: Record<string, unknown>) {
+  return String(
+    item.artist ??
+      item.owner ??
+      item.album ??
+      item.trackCount ??
+      item.duration ??
+      "Daoliyu",
+  );
+}
+
+function daoliyuAuthLabel(status: MusicOverview["auth"]["status"] | "unknown") {
+  const labels: Record<string, string> = {
+    authenticated: "已登录",
+    not_authenticated: "未登录",
+    not_configured: "未配置",
+    error: "错误",
+    unknown: "未检测",
+  };
+  return labels[status] ?? status;
+}
+
+function compactUrl(value: string) {
+  return value.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function MemoryCandidatesPanel({
