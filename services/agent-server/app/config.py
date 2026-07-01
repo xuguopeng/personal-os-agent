@@ -12,7 +12,10 @@ class Settings(BaseModel):
     bind_host: str = getenv("AGENT_SERVER_BIND_HOST", "0.0.0.0")
     port: int = int(getenv("AGENT_SERVER_PORT", "8088"))
     token: str = getenv("AGENT_SERVER_TOKEN", "")
-    daoliyu_base_url: str = getenv("DAOLIYU_BASE_URL", "http://127.0.0.1:5173")
+    daoliyu_base_urls: str = getenv(
+        "DAOLIYU_BASE_URLS",
+        getenv("DAOLIYU_BASE_URL", "http://127.0.0.1:5173,https://daoliyu.xuguopeng.com"),
+    )
 
 
 @lru_cache

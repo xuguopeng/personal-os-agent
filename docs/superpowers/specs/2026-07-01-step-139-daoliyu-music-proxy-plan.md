@@ -32,14 +32,36 @@ Agent Server /v1/music/... -> Daoliyu http://host.docker.internal:5173/api/...
 ## 已完成
 
 - 新增 `services/agent-server/app/music.py`
-- 新增 `DAOLIYU_BASE_URL` 配置
+- 新增 `DAOLIYU_BASE_URLS` 配置，支持多个上游按顺序 fallback
 - Docker Compose 默认配置：
-  - `DAOLIYU_BASE_URL=http://host.docker.internal:5173`
+  - `DAOLIYU_BASE_URLS=http://host.docker.internal:5173,https://daoliyu.xuguopeng.com`
   - `extra_hosts=host.docker.internal:host-gateway`
 - 新增接口：
   - `GET /v1/music/status`
   - `GET /v1/music/endpoints`
   - `ANY /v1/music/{full_path:path}`
+
+## 上游选择策略
+
+优先使用本地/内网上游，速度最快：
+
+```text
+http://127.0.0.1:5173
+```
+
+Docker 部署时优先使用宿主机上的 5173：
+
+```text
+http://host.docker.internal:5173
+```
+
+如果本地/内网上游不可达或返回 5xx，则自动 fallback 到公网域名：
+
+```text
+https://daoliyu.xuguopeng.com
+```
+
+`/v1/music/status` 会返回每个上游的检测结果和当前激活的 `activeBaseUrl`。
 
 ## 代理规则
 

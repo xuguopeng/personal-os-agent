@@ -128,21 +128,41 @@ HOP_BY_HOP_HEADERS = {
 
 @router.get("/status")
 async def daoliyu_status() -> dict[str, Any]:
-    base_url = normalized_daoliyu_base_url()
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            response = await client.get(f"{base_url}/api/auth/bootstrap")
-    except httpx.HTTPError as error:
-        return {
-            "status": "error",
-            "baseUrl": base_url,
-            "message": f"倒流服务不可达：{error}",
-        }
+    checks: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=8) as client:
+        for base_url in daoliyu_base_urls():
+            try:
+                response = await client.get(f"{base_url}/api/auth/bootstrap")
+            except httpx.HTTPError as error:
+                checks.append(
+                    {
+                        "baseUrl": base_url,
+                        "status": "error",
+                        "message": f"不可达：{error}",
+                    }
+                )
+                continue
+            check = {
+                "baseUrl": base_url,
+                "status": "connected" if response.status_code < 500 else "error",
+                "httpStatus": response.status_code,
+                "message": "可用" if response.status_code < 500 else response.text[:300],
+            }
+            checks.append(check)
+            if check["status"] == "connected":
+                return {
+                    "status": "connected",
+                    "baseUrl": base_url,
+                    "activeBaseUrl": base_url,
+                    "checks": checks,
+                    "message": "倒流服务已连接。",
+                }
     return {
-        "status": "connected" if response.status_code < 500 else "error",
-        "baseUrl": base_url,
-        "httpStatus": response.status_code,
-        "message": "倒流服务已连接。" if response.status_code < 500 else response.text[:300],
+        "status": "error",
+        "baseUrl": daoliyu_base_urls()[0],
+        "activeBaseUrl": None,
+        "checks": checks,
+        "message": "所有倒流服务上游都不可达。",
     }
 
 
@@ -150,7 +170,8 @@ async def daoliyu_status() -> dict[str, Any]:
 def list_daoliyu_endpoints() -> dict[str, Any]:
     return {
         "service": "daoliyu",
-        "baseUrl": normalized_daoliyu_base_url(),
+        "baseUrl": daoliyu_base_urls()[0],
+        "baseUrls": daoliyu_base_urls(),
         "count": len(DAOLIYU_ENDPOINTS),
         "proxyPrefix": "/v1/music",
         "auth": "登录接口走 /v1/music/api/auth/login；其他接口把倒流 token 放在 Authorization: Bearer <token>。",
@@ -164,29 +185,40 @@ def list_daoliyu_endpoints() -> dict[str, Any]:
 )
 async def proxy_daoliyu(full_path: str, request: Request) -> Response:
     target_path = normalize_proxy_path(full_path)
-    target_url = f"{normalized_daoliyu_base_url()}{target_path}"
     body = await request.body()
     headers = {
         key: value
         for key, value in request.headers.items()
         if key.lower() not in HOP_BY_HOP_HEADERS
     }
-    try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-            upstream = await client.request(
-                request.method,
-                target_url,
-                params=request.query_params,
-                content=body,
-                headers=headers,
-            )
-    except httpx.HTTPError as error:
+    errors: list[dict[str, str]] = []
+    upstream: httpx.Response | None = None
+    target_url = ""
+    async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
+        for base_url in daoliyu_base_urls():
+            target_url = f"{base_url}{target_path}"
+            try:
+                upstream = await client.request(
+                    request.method,
+                    target_url,
+                    params=request.query_params,
+                    content=body,
+                    headers=headers,
+                )
+            except httpx.HTTPError as error:
+                errors.append({"target": target_url, "message": str(error)})
+                continue
+            if upstream.status_code < 500:
+                break
+            errors.append({"target": target_url, "message": f"HTTP {upstream.status_code}"})
+
+    if upstream is None:
         return JSONResponse(
             status_code=502,
             content={
                 "status": "error",
-                "message": f"倒流服务代理失败：{error}",
-                "target": target_url,
+                "message": "倒流服务代理失败：所有上游都不可达。",
+                "errors": errors,
             },
         )
 
@@ -203,8 +235,13 @@ async def proxy_daoliyu(full_path: str, request: Request) -> Response:
     )
 
 
-def normalized_daoliyu_base_url() -> str:
-    return get_settings().daoliyu_base_url.rstrip("/")
+def daoliyu_base_urls() -> list[str]:
+    urls = [
+        value.strip().rstrip("/")
+        for value in get_settings().daoliyu_base_urls.split(",")
+        if value.strip()
+    ]
+    return urls or ["http://127.0.0.1:5173", "https://daoliyu.xuguopeng.com"]
 
 
 def normalize_proxy_path(full_path: str) -> str:
