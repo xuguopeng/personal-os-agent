@@ -16,6 +16,8 @@ class Settings(BaseModel):
         "DAOLIYU_BASE_URLS",
         getenv("DAOLIYU_BASE_URL", "http://127.0.0.1:5173,https://daoliyu.xuguopeng.com"),
     )
+    daoliyu_username: str = getenv("DAOLIYU_USERNAME", "")
+    daoliyu_password: str = getenv("DAOLIYU_PASSWORD", "")
 
 
 @lru_cache

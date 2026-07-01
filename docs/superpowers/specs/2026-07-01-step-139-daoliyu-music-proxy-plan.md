@@ -39,7 +39,41 @@ Agent Server /v1/music/... -> Daoliyu http://host.docker.internal:5173/api/...
 - 新增接口：
   - `GET /v1/music/status`
   - `GET /v1/music/endpoints`
+  - `POST /v1/music/auth/login`
+  - `GET /v1/music/auth/status`
+  - `POST /v1/music/auth/logout`
   - `ANY /v1/music/{full_path:path}`
+
+## 服务端自动登录
+
+Daoliyu 账号密码不写入代码、文档、SQLite 或 git。
+
+NAS 部署时通过环境变量配置：
+
+```text
+DAOLIYU_USERNAME=<你的账号>
+DAOLIYU_PASSWORD=<你的密码>
+```
+
+登录流程：
+
+1. 调用 `POST /v1/music/auth/login`。
+2. Agent Server 使用环境变量登录 Daoliyu。
+3. 成功后只把 token 缓存在服务进程内。
+4. 返回状态、用户信息和上游地址，不返回 token。
+5. 后续代理请求如果没有 `Authorization` 头，Agent Server 会自动附加缓存 token。
+
+检查登录状态：
+
+```bash
+curl https://os.xuguopeng.com/v1/music/auth/status
+```
+
+退出登录：
+
+```bash
+curl -X POST https://os.xuguopeng.com/v1/music/auth/logout
+```
 
 ## 上游选择策略
 

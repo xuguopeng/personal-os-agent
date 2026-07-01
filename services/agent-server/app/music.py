@@ -10,6 +10,12 @@ from .config import get_settings
 
 router = APIRouter(prefix="/v1/music", tags=["music"])
 
+DAOLIYU_TOKEN_CACHE: dict[str, Any] = {
+    "token": "",
+    "baseUrl": "",
+    "user": None,
+}
+
 DAOLIYU_ENDPOINTS: list[dict[str, str]] = [
     {"method": "DELETE", "path": "/api/admin/scan-paths/{id}", "summary": "删除扫描路径"},
     {"method": "DELETE", "path": "/api/admin/users/{id}", "summary": "删除用户"},
@@ -179,6 +185,53 @@ def list_daoliyu_endpoints() -> dict[str, Any]:
     }
 
 
+@router.post("/auth/login")
+async def login_daoliyu_with_configured_credentials() -> JSONResponse:
+    settings = get_settings()
+    if not settings.daoliyu_username or not settings.daoliyu_password:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "not_configured",
+                "message": "NAS 服务端未配置 DAOLIYU_USERNAME / DAOLIYU_PASSWORD。",
+            },
+        )
+
+    result = await login_daoliyu()
+    if result["status"] != "authenticated":
+        return JSONResponse(status_code=502, content=result)
+    return JSONResponse(content=safe_auth_status(result))
+
+
+@router.get("/auth/status")
+async def daoliyu_auth_status() -> dict[str, Any]:
+    if not DAOLIYU_TOKEN_CACHE["token"]:
+        return {
+            "status": "not_authenticated",
+            "configured": bool(
+                get_settings().daoliyu_username and get_settings().daoliyu_password
+            ),
+            "baseUrl": "",
+            "user": None,
+            "message": "尚未登录倒流音乐服务。",
+        }
+
+    profile = await fetch_daoliyu_profile()
+    if profile["status"] == "authenticated":
+        return safe_auth_status(profile)
+    DAOLIYU_TOKEN_CACHE.update({"token": "", "baseUrl": "", "user": None})
+    return profile
+
+
+@router.post("/auth/logout")
+def logout_daoliyu() -> dict[str, Any]:
+    DAOLIYU_TOKEN_CACHE.update({"token": "", "baseUrl": "", "user": None})
+    return {
+        "status": "not_authenticated",
+        "message": "已清除倒流音乐服务 token 缓存。",
+    }
+
+
 @router.api_route(
     "/{full_path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -191,6 +244,10 @@ async def proxy_daoliyu(full_path: str, request: Request) -> Response:
         for key, value in request.headers.items()
         if key.lower() not in HOP_BY_HOP_HEADERS
     }
+    if should_auto_attach_token(target_path, headers):
+        token = await get_or_login_daoliyu_token()
+        if token:
+            headers["authorization"] = f"Bearer {token}"
     errors: list[dict[str, str]] = []
     upstream: httpx.Response | None = None
     target_url = ""
@@ -242,6 +299,128 @@ def daoliyu_base_urls() -> list[str]:
         if value.strip()
     ]
     return urls or ["http://127.0.0.1:5173", "https://daoliyu.xuguopeng.com"]
+
+
+async def get_or_login_daoliyu_token() -> str:
+    token = str(DAOLIYU_TOKEN_CACHE.get("token") or "")
+    if token:
+        return token
+    result = await login_daoliyu()
+    if result["status"] != "authenticated":
+        return ""
+    return str(DAOLIYU_TOKEN_CACHE.get("token") or "")
+
+
+async def login_daoliyu() -> dict[str, Any]:
+    settings = get_settings()
+    errors: list[dict[str, str]] = []
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+        for base_url in daoliyu_base_urls():
+            login_url = f"{base_url}/api/auth/login"
+            try:
+                response = await client.post(
+                    login_url,
+                    json={
+                        "username": settings.daoliyu_username,
+                        "password": settings.daoliyu_password,
+                    },
+                )
+            except httpx.HTTPError as error:
+                errors.append({"target": login_url, "message": str(error)})
+                continue
+            if response.status_code >= 500:
+                errors.append({"target": login_url, "message": f"HTTP {response.status_code}"})
+                continue
+            if response.status_code >= 400:
+                return {
+                    "status": "error",
+                    "baseUrl": base_url,
+                    "message": f"倒流登录失败：HTTP {response.status_code}",
+                }
+            payload = response.json()
+            token = payload.get("access_token") or payload.get("token") or ""
+            if not token:
+                return {
+                    "status": "error",
+                    "baseUrl": base_url,
+                    "message": "倒流登录响应没有 token。",
+                }
+            DAOLIYU_TOKEN_CACHE.update(
+                {
+                    "token": token,
+                    "baseUrl": base_url,
+                    "user": payload.get("user"),
+                }
+            )
+            return {
+                "status": "authenticated",
+                "baseUrl": base_url,
+                "user": payload.get("user"),
+                "message": "倒流音乐服务已登录。",
+            }
+    return {
+        "status": "error",
+        "baseUrl": "",
+        "errors": errors,
+        "message": "倒流登录失败：所有上游都不可达。",
+    }
+
+
+async def fetch_daoliyu_profile() -> dict[str, Any]:
+    token = str(DAOLIYU_TOKEN_CACHE.get("token") or "")
+    base_url = str(DAOLIYU_TOKEN_CACHE.get("baseUrl") or daoliyu_base_urls()[0])
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
+            response = await client.get(
+                f"{base_url}/api/auth/profile",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as error:
+        return {
+            "status": "error",
+            "baseUrl": base_url,
+            "message": f"倒流 profile 检测失败：{error}",
+        }
+    if response.status_code == 401:
+        return {
+            "status": "not_authenticated",
+            "baseUrl": base_url,
+            "message": "倒流 token 已失效。",
+        }
+    if response.status_code >= 400:
+        return {
+            "status": "error",
+            "baseUrl": base_url,
+            "message": f"倒流 profile 返回 HTTP {response.status_code}",
+        }
+    user = response.json()
+    DAOLIYU_TOKEN_CACHE["user"] = user
+    return {
+        "status": "authenticated",
+        "baseUrl": base_url,
+        "user": user,
+        "message": "倒流音乐服务已登录。",
+    }
+
+
+def safe_auth_status(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": result.get("status", "unknown"),
+        "configured": bool(get_settings().daoliyu_username and get_settings().daoliyu_password),
+        "baseUrl": result.get("baseUrl") or DAOLIYU_TOKEN_CACHE.get("baseUrl") or "",
+        "user": result.get("user") or DAOLIYU_TOKEN_CACHE.get("user"),
+        "message": result.get("message", ""),
+    }
+
+
+def should_auto_attach_token(target_path: str, headers: dict[str, str]) -> bool:
+    if any(key.lower() == "authorization" for key in headers):
+        return False
+    return target_path not in {
+        "/api/auth/bootstrap",
+        "/api/auth/bootstrap-admin",
+        "/api/auth/login",
+    }
 
 
 def normalize_proxy_path(full_path: str) -> str:
