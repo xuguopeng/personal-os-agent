@@ -123,6 +123,28 @@ class NasMusicApi {
         .toList();
   }
 
+  static Future<Map<String, dynamic>> getRadioChat() async {
+    final response = await HttpUtil().get('/radio/chat');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> sendRadioChat(String content) async {
+    final response = await HttpUtil().post(
+      '/radio/chat',
+      data: {'content': content},
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> updateRadioMemory({
+    required String memoryId,
+    required bool remember,
+  }) async {
+    final action = remember ? 'remember' : 'ignore';
+    final response = await HttpUtil().post('/radio/memories/$memoryId/$action');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   static Future<Map<String, dynamic>> createRadioJob({
     required List<String> trackIds,
     String title = '今日 NAS 音乐电台',

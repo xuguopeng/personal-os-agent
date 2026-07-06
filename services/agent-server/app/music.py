@@ -367,6 +367,160 @@ def list_radio_episodes() -> dict[str, Any]:
     }
 
 
+@router.get("/radio/chat")
+def list_radio_chat() -> dict[str, Any]:
+    with db() as conn:
+        message_rows = conn.execute(
+            """
+            SELECT * FROM music_radio_chat_messages
+            ORDER BY created_at ASC
+            LIMIT 80
+            """
+        ).fetchall()
+        memory_rows = conn.execute(
+            """
+            SELECT * FROM music_preference_memories
+            ORDER BY
+                CASE status
+                    WHEN 'candidate' THEN 0
+                    WHEN 'remembered' THEN 1
+                    ELSE 2
+                END,
+                created_at DESC
+            LIMIT 40
+            """
+        ).fetchall()
+    return {
+        "messages": [radio_chat_message_row_to_dict(row) for row in message_rows],
+        "memories": [music_memory_row_to_dict(row) for row in memory_rows],
+    }
+
+
+@router.post("/radio/chat")
+def create_radio_chat_message(payload: dict[str, Any]) -> JSONResponse:
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "请输入要告诉私人 DJ 的内容。"},
+        )
+    now_text = datetime.now(ZoneInfo(get_settings().radio_daily_timezone)).isoformat()
+    user_message_id = uuid.uuid4().hex
+    classification = classify_radio_chat(content)
+    memory_id = ""
+    memory: dict[str, Any] | None = None
+
+    with db() as conn:
+        if classification["memoryCandidate"]:
+            memory_id = uuid.uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO music_preference_memories (
+                    id, category, title, content, source_message_id, status, confidence
+                ) VALUES (?, ?, ?, ?, ?, 'candidate', ?)
+                """,
+                (
+                    memory_id,
+                    classification["memoryCategory"],
+                    classification["memoryTitle"],
+                    classification["memoryContent"],
+                    user_message_id,
+                    classification["confidence"],
+                ),
+            )
+            memory = music_memory_row_to_dict(
+                conn.execute(
+                    "SELECT * FROM music_preference_memories WHERE id = ?",
+                    (memory_id,),
+                ).fetchone()
+            )
+        conn.execute(
+            """
+            INSERT INTO music_radio_chat_messages (
+                id, role, content, intent_type, effect_summary, memory_id, created_at
+            ) VALUES (?, 'user', ?, ?, ?, ?, ?)
+            """,
+            (
+                user_message_id,
+                content,
+                classification["intentType"],
+                classification["effectSummary"],
+                memory_id,
+                now_text,
+            ),
+        )
+        assistant_message_id = uuid.uuid4().hex
+        assistant_content = build_radio_chat_reply(content, classification, memory)
+        conn.execute(
+            """
+            INSERT INTO music_radio_chat_messages (
+                id, role, content, intent_type, effect_summary, memory_id, created_at
+            ) VALUES (?, 'assistant', ?, ?, ?, ?, ?)
+            """,
+            (
+                assistant_message_id,
+                assistant_content,
+                classification["intentType"],
+                classification["effectSummary"],
+                memory_id,
+                now_text,
+            ),
+        )
+        user_row = conn.execute(
+            "SELECT * FROM music_radio_chat_messages WHERE id = ?",
+            (user_message_id,),
+        ).fetchone()
+        assistant_row = conn.execute(
+            "SELECT * FROM music_radio_chat_messages WHERE id = ?",
+            (assistant_message_id,),
+        ).fetchone()
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "intentType": classification["intentType"],
+            "message": radio_chat_message_row_to_dict(user_row),
+            "assistant": radio_chat_message_row_to_dict(assistant_row),
+            "memoryCandidate": memory,
+        }
+    )
+
+
+@router.post("/radio/memories/{memory_id}/{action}")
+def update_radio_memory(memory_id: str, action: str) -> JSONResponse:
+    status = {
+        "remember": "remembered",
+        "ignore": "ignored",
+    }.get(action)
+    if status is None:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "记忆操作只支持 remember 或 ignore。"},
+        )
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM music_preference_memories WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
+        if row is None:
+            return JSONResponse(
+                status_code=404,
+                content={"status": "not_found", "message": "没有找到这条记忆候选。"},
+            )
+        conn.execute(
+            """
+            UPDATE music_preference_memories
+            SET status = ?, updated_at = current_timestamp
+            WHERE id = ?
+            """,
+            (status, memory_id),
+        )
+        updated = conn.execute(
+            "SELECT * FROM music_preference_memories WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
+    return JSONResponse(content={"status": "ok", "memory": music_memory_row_to_dict(updated)})
+
+
 @router.get("/radio/jobs/{job_id}")
 def get_radio_job(job_id: str) -> JSONResponse:
     with db() as conn:
@@ -2170,6 +2324,127 @@ def radio_episode_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
+
+
+def radio_chat_message_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "content": row["content"],
+        "intentType": row["intent_type"],
+        "effectSummary": row["effect_summary"],
+        "memoryId": row["memory_id"],
+        "createdAt": row["created_at"],
+    }
+
+
+def music_memory_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    return {
+        "id": row["id"],
+        "category": row["category"],
+        "title": row["title"],
+        "content": row["content"],
+        "sourceMessageId": row["source_message_id"],
+        "status": row["status"],
+        "confidence": row["confidence"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def classify_radio_chat(content: str) -> dict[str, Any]:
+    lowered = content.lower()
+    long_term_markers = [
+        "以后",
+        "一直",
+        "我喜欢",
+        "我爱听",
+        "我不喜欢",
+        "不爱听",
+        "少推",
+        "多推",
+        "记住",
+        "以后别",
+        "工作时",
+        "晚上",
+        "雨天",
+        "开车",
+        "睡前",
+    ]
+    session_markers = [
+        "今天",
+        "这期",
+        "现在",
+        "下一首",
+        "换",
+        "少说话",
+        "多放歌",
+        "别说太多",
+        "生成",
+        "播放",
+    ]
+    is_long_term = any(marker in content for marker in long_term_markers)
+    is_session = any(marker in content for marker in session_markers)
+    if any(marker in lowered for marker in ["skip", "next"]):
+        is_session = True
+
+    intent_type = "long_term_preference" if is_long_term else "session_instruction" if is_session else "chat"
+    effect_summary = {
+        "long_term_preference": "识别为可能长期有效的音乐偏好，等待你确认是否记住。",
+        "session_instruction": "识别为当前电台指令，先影响本期电台上下文。",
+        "chat": "识别为普通聊天，暂时只保留在电台对话里。",
+    }[intent_type]
+
+    memory_title = ""
+    memory_content = ""
+    memory_category = "music_preference"
+    confidence = 0.62
+    if is_long_term:
+        memory_title = build_memory_title(content)
+        memory_content = content
+        if any(marker in content for marker in ["不喜欢", "不爱听", "少推", "以后别"]):
+            memory_category = "music_avoidance"
+            confidence = 0.72
+        elif any(marker in content for marker in ["工作", "晚上", "雨天", "开车", "睡前"]):
+            memory_category = "music_scene_rule"
+            confidence = 0.68
+
+    return {
+        "intentType": intent_type,
+        "effectSummary": effect_summary,
+        "memoryCandidate": is_long_term,
+        "memoryCategory": memory_category,
+        "memoryTitle": memory_title,
+        "memoryContent": memory_content,
+        "confidence": confidence,
+    }
+
+
+def build_memory_title(content: str) -> str:
+    compact = " ".join(content.split())
+    if len(compact) <= 22:
+        return compact
+    return f"{compact[:22]}..."
+
+
+def build_radio_chat_reply(
+    content: str,
+    classification: dict[str, Any],
+    memory: dict[str, Any] | None,
+) -> str:
+    intent_type = classification["intentType"]
+    if intent_type == "long_term_preference" and memory:
+        return (
+            f"我听到了，这像是一条长期音乐偏好：{memory['title']}。"
+            "我先放到待确认记忆里，你点“记住”后，以后生成电台会参考它。"
+        )
+    if intent_type == "session_instruction":
+        return "收到，这条先作为本期电台指令。我会优先按这个方向调整今天的 DJ 企划和播放感觉。"
+    return "收到，我先记在这次电台对话里。你也可以直接说“以后记住……”来沉淀成长期偏好。"
 
 
 def radio_job_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

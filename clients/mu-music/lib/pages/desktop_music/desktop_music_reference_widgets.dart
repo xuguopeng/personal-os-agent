@@ -247,6 +247,83 @@ class _ReferencePanel extends StatelessWidget {
   }
 }
 
+class _RadioWaveform extends StatefulWidget {
+  _RadioWaveform({required this.active});
+
+  final bool active;
+
+  @override
+  State<_RadioWaveform> createState() => _RadioWaveformState();
+}
+
+class _RadioWaveformState extends State<_RadioWaveform>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1400),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return SizedBox(
+          height: 72,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: List.generate(46, (index) {
+              final wave =
+                  math.sin(index * 0.58 + _controller.value * math.pi * 2);
+              final alt =
+                  math.sin(index * 0.23 + _controller.value * math.pi * 3);
+              final height = (widget.active
+                      ? 10 + (wave.abs() * 34) + (alt.abs() * 18)
+                      : 8 + (index % 5) * 4)
+                  .toDouble();
+              final opacity = widget.active ? 0.82 : 0.34;
+              return Expanded(
+                child: Align(
+                  alignment: Alignment.center,
+                  child: Container(
+                    margin: EdgeInsets.symmetric(horizontal: 2),
+                    height: height,
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryBtn.withValues(alpha: opacity),
+                      borderRadius: BorderRadius.circular(999),
+                      boxShadow: widget.active
+                          ? [
+                              BoxShadow(
+                                color: AppColors.primaryBtn
+                                    .withValues(alpha: 0.32),
+                                blurRadius: 10,
+                              ),
+                            ]
+                          : [],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _RightRailTrack extends StatelessWidget {
   _RightRailTrack({
     required this.track,

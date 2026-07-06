@@ -121,6 +121,28 @@ CREATE TABLE IF NOT EXISTS music_radio_episodes (
     updated_at TEXT NOT NULL DEFAULT current_timestamp
 );
 
+CREATE TABLE IF NOT EXISTS music_radio_chat_messages (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    intent_type TEXT NOT NULL DEFAULT 'chat',
+    effect_summary TEXT NOT NULL DEFAULT '',
+    memory_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT current_timestamp
+);
+
+CREATE TABLE IF NOT EXISTS music_preference_memories (
+    id TEXT PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT 'music_preference',
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_message_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    confidence REAL NOT NULL DEFAULT 0.6,
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp
+);
+
 CREATE TABLE IF NOT EXISTS music_tracks (
     id TEXT PRIMARY KEY,
     source_path TEXT NOT NULL UNIQUE,
