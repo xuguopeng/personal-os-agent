@@ -595,25 +595,10 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   Widget _buildVerticalDjApp() {
     return _ClaudioParticleField(
-      interactive: _verticalPanel == _VerticalDjPanel.profile,
-      focusMode: _verticalPanel == _VerticalDjPanel.profile,
-      lyricPulse: _verticalPanel == _VerticalDjPanel.player,
-      child: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(14, 12, 14, 14),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 492),
-              child: AnimatedSwitcher(
-                duration: Duration(milliseconds: 260),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                child: _buildVerticalPanel(),
-              ),
-            ),
-          ),
-        ),
-      ),
+      interactive: true,
+      focusMode: false,
+      lyricPulse: false,
+      child: SizedBox.expand(),
     );
   }
 
