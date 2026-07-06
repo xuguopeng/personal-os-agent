@@ -598,7 +598,17 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       interactive: true,
       focusMode: false,
       lyricPulse: false,
-      child: SizedBox.expand(),
+      child: SafeArea(
+        child: Stack(
+          children: [
+            Positioned(
+              top: 14,
+              right: 14,
+              child: _buildThemeSegment(),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
