@@ -586,23 +586,22 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.appBg,
-      body: Stack(
-        children: [
-          Positioned.fill(child: _StarFieldBackground()),
-          Column(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    _buildReferenceSidebar(),
-                    Expanded(child: _buildReferenceWorkspace()),
-                  ],
-                ),
-              ),
-              _buildReferencePlayerBar(),
-            ],
+      body: _buildVerticalDjApp(),
+    );
+  }
+
+  Widget _buildVerticalDjApp() {
+    return _ClaudioParticleField(
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(18, 16, 18, 18),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: 460),
+              child: _buildClaudioPhoneCard(embeddedChat: true),
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -845,7 +844,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     );
   }
 
-  Widget _buildClaudioPhoneCard() {
+  Widget _buildClaudioPhoneCard({bool embeddedChat = false}) {
     final latest = _radioEpisodes.isNotEmpty ? _radioEpisodes.first : null;
     final title = latest?['title']?.toString() ?? 'Monday Night\nExhale';
     final scriptPlan = _radioScriptPlan(latest);
@@ -1011,9 +1010,15 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
                         SizedBox(height: 20),
                         _buildClaudioPhoneProgress(latest),
                         SizedBox(height: 18),
-                        Expanded(child: _buildClaudioPhoneTranscript(intro)),
+                        Expanded(
+                          child: embeddedChat
+                              ? _buildClaudioEmbeddedChat(intro)
+                              : _buildClaudioPhoneTranscript(intro),
+                        ),
                         SizedBox(height: 16),
-                        _buildClaudioPhoneBottomBar(latest, live),
+                        embeddedChat
+                            ? _buildClaudioEmbeddedInput(latest, live)
+                            : _buildClaudioPhoneBottomBar(latest, live),
                         SizedBox(height: 18),
                       ],
                     ),
@@ -1124,6 +1129,163 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildClaudioEmbeddedChat(String intro) {
+    final messages = _radioChatMessages.take(80).toList();
+    if (messages.isEmpty) {
+      return _buildClaudioPhoneTranscript(intro);
+    }
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(16, 14, 16, 10),
+      decoration: BoxDecoration(
+        color: Color(0xFFEDEBE5),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: ListView.builder(
+        controller: _radioChatScrollController,
+        padding: EdgeInsets.zero,
+        itemCount: messages.length,
+        itemBuilder: (context, index) {
+          final message = messages[index];
+          final isUser = message['role']?.toString() == 'user';
+          return Align(
+            alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              constraints: BoxConstraints(maxWidth: 330),
+              margin: EdgeInsets.only(bottom: 10),
+              padding: EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+              decoration: BoxDecoration(
+                color: isUser ? Color(0xFF111111) : Color(0xFFF8F7F2),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(
+                  color: isUser ? Color(0xFF111111) : Color(0xFFDCD8CF),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment:
+                    isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isUser ? '我' : 'Muo FM',
+                    style: TextStyle(
+                      color: isUser ? Colors.white70 : Color(0xFF88847C),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(height: 5),
+                  Text(
+                    message['content']?.toString() ?? '',
+                    style: TextStyle(
+                      color: isUser ? Colors.white : Color(0xFF111111),
+                      fontSize: 14,
+                      height: 1.42,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildClaudioEmbeddedInput(
+    Map<String, dynamic>? latest,
+    bool live,
+  ) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Text(
+              live ? 'LIVE' : '0:03',
+              style: TextStyle(
+                color: Color(0xFF111111),
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            SizedBox(width: 14),
+            Expanded(
+              child: SizedBox(
+                height: 30,
+                child: _RadioWaveform(
+                  active: true,
+                  color: Color(0xFF111111),
+                  inactiveColor: Color(0xFFC9C6BE),
+                  barCount: 36,
+                ),
+              ),
+            ),
+            SizedBox(width: 12),
+            InkWell(
+              borderRadius: BorderRadius.circular(999),
+              onTap: latest == null
+                  ? _runDailyRadioNow
+                  : () => _playRadioEpisode(latest),
+              child: Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Color(0xFF111111),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  latest == null ? Icons.auto_awesome : Icons.play_arrow,
+                  color: Colors.white,
+                  size: 21,
+                ),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 12),
+        Container(
+          padding: EdgeInsets.fromLTRB(14, 2, 4, 2),
+          decoration: BoxDecoration(
+            color: Color(0xFF111111),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _radioChatController,
+                  minLines: 1,
+                  maxLines: 3,
+                  onSubmitted: (_) => _sendRadioChat(),
+                  style: TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'Say something to the DJ...',
+                    hintStyle: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.38),
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '发送',
+                onPressed: _radioChatSending ? null : _sendRadioChat,
+                icon: _radioChatSending
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: _buildTinyLoading(Colors.white),
+                      )
+                    : Icon(Icons.arrow_upward_rounded, color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

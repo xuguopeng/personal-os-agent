@@ -177,3 +177,4 @@
 - Claudio 氛围电台第一版：Flutter “今日电台”改为私人 DJ 房间布局，包含 LIVE 状态、动态波形、DJ 开场文本、本期歌单、最近电台、对话面板和音乐画像候选面板；新增 `/radio/chat` 对话接口和 `/radio/memories/{id}/remember|ignore` 记忆确认接口，聊天内容先分类为当前指令、长期偏好候选或普通聊天，长期画像默认待确认，不会自动写死。
 - 电台聊天接入 MiniMax M3：`POST /v1/music/radio/chat` 从本地模板回复升级为 MiniMax Chat 调用，M3 会结合已确认音乐偏好和最近对话生成 DJ 回复，并判断当前指令/长期偏好候选/普通聊天；MiniMax 不可用时继续使用本地规则兜底。
 - Claudio 竖版视觉复刻第一轮：Flutter “今日电台”切换为居中的竖版播放器卡片，结构参考 Claudio 视频中的黑色头部、Speaking 状态、白色节目卡片、进度条、transcript 区和底部波形播放按钮；新增可复用的动态粒子云背景 `_ClaudioParticleField`，右侧继续保留私人 DJ 对话和音乐画像确认面板。
+- Flutter 客户端单用途竖屏化：启动即进入 Claudio/Muo FM 竖版 AI DJ，不再进入旧首页、底部导航、音乐列表、推荐、搜索、歌手、用户等页面；macOS 窗口固定为 `520x860`，禁用缩放和全屏，只保留系统关闭与最小化按钮，方便后续手机端复用同一竖屏体验。
