@@ -782,6 +782,22 @@ def daily_radio_episode_exists(day: date) -> bool:
     return row is not None
 
 
+def latest_daily_radio_mix_episode(day: date) -> dict[str, Any] | None:
+    day_text = day.isoformat()
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM music_radio_episodes
+            WHERE title LIKE ?
+              AND generator LIKE '%ffmpeg%'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (f"%{day_text}%",),
+        ).fetchone()
+    return radio_episode_row_to_dict(row) if row else None
+
+
 async def create_daily_radio_episode(force: bool = False) -> dict[str, Any]:
     settings = get_settings()
     now = datetime.now(ZoneInfo(settings.radio_daily_timezone))
@@ -865,8 +881,18 @@ async def create_daily_radio_mix_episode(payload: dict[str, Any]) -> dict[str, A
     requested_count = int(payload.get("trackCount") or 3)
     track_count = max(1, min(requested_count, 6))
     title = str(payload.get("title") or f"西安私人音乐电台 {today.isoformat()}").strip()
+    force_regenerate = bool(payload.get("force") or payload.get("regenerate"))
     force_mock_script = bool(payload.get("mockScript"))
     force_mock_tts = bool(payload.get("mockTts") or payload.get("mockAudio"))
+    if not force_regenerate:
+        existing_episode = latest_daily_radio_mix_episode(today)
+        if existing_episode:
+            return {
+                "status": "cached",
+                "episode": existing_episode,
+                "message": "今天的音乐电台已经生成过，已直接复用。",
+                "date": today.isoformat(),
+            }
 
     weather = await fetch_radio_weather()
     recent_tracks = await fetch_recent_playback_tracks(settings.radio_recent_limit)
@@ -1152,7 +1178,7 @@ def build_radio_script(
         prefix = f"{weather_text}\n" if weather_text else ""
         return (
             f"{prefix}欢迎来到《{title}》。今天暂时没有读取到曲目，"
-            "这期先作为音乐电台测试节目。等 NAS 曲库连接稳定后，我会根据你的音乐列表生成更贴合心情的串词。"
+            "这期先做一段轻一点的暖场。等 NAS 曲库连接稳定后，我会根据你的音乐列表生成更贴合心情的串词。"
         )
 
     lines = [
@@ -1189,15 +1215,14 @@ def build_radio_intro_script(
     if not selected_tracks:
         prefix = f"{weather_text}\n" if weather_text else ""
         return (
-            f"{prefix}欢迎来到《{title}》。今天暂时没有读取到最近播放记录，"
-            "我会先生成一段测试电台。等曲库记录稳定后，会按你的听歌习惯推荐真实歌曲。"
+            f"{prefix}这里是今天的《{title}》。我暂时还没读到足够的最近播放记录，"
+            "所以先把这期当成一段暖场。等你的曲库和听歌记录稳定下来，我会更像一个懂你口味的私人电台。"
         )
 
     lines = [
-        f"欢迎来到《{title}》。",
-        weather_text or "今天从你的 NAS 音乐里挑几首，做一期私人电台。",
-        "这一期会先简单介绍天气，再推荐几首最近适合你听的歌。介绍结束后，就进入歌曲播放。",
-        "今天推荐的歌单是：",
+        f"这里是《{title}》。",
+        weather_text or "今天我从你的 NAS 音乐里挑了几首歌，做一期私人电台。",
+        "这期不做很硬的榜单介绍，就像一段边走边聊的歌单。先说说为什么选它们，然后我们直接进入播放。",
     ]
     for index, track in enumerate(selected_tracks, start=1):
         name = first_string_value(track, "title", "name") or "未知歌曲"
@@ -1205,10 +1230,10 @@ def build_radio_intro_script(
         album = radio_album_name(track)
         reason = radio_recommend_reason(index, name, artist, weather)
         if album:
-            lines.append(f"第 {index} 首，{artist} 的《{name}》，来自《{album}》。推荐理由：{reason}")
+            lines.append(f"{index}. {artist} 的《{name}》，来自《{album}》。{reason}")
         else:
-            lines.append(f"第 {index} 首，{artist} 的《{name}》。推荐理由：{reason}")
-    lines.append("好了，先不多说，接下来开始播放今天的推荐歌曲。")
+            lines.append(f"{index}. {artist} 的《{name}》。{reason}")
+    lines.append("好了，先把话放轻一点，音乐自己会把剩下的情绪接住。")
     return "\n".join(lines)
 
 
@@ -1229,7 +1254,7 @@ def build_radio_outro_script(
         return (
             f"今天的《{title}》就到这里。{weather_text}"
             f"刚才这几首歌里，{names}把今天的情绪串了起来。"
-            "希望它们能陪你把手头的事情做完，也让今天更有一点自己的节奏。我们下一期再见。"
+            "如果其中有一首刚好贴住了你现在的状态，就让它多留一会儿。我们下一期再见。"
         )
     return (
         f"今天的《{title}》就到这里。"
@@ -1391,14 +1416,19 @@ def build_minimax_radio_prompt(
         )
     weather_line = build_weather_intro(weather) or "天气暂时未知。"
     return (
-        "你是一个私人音乐电台主持人，请根据日期、天气和我的最近听歌记录，生成一期自然的中文电台脚本。\n"
-        "要求：\n"
+        "你是一个私人音乐电台主持人，风格像朋友在旁边轻声介绍音乐，不像新闻播报，也不像产品测试文案。\n"
+        "请根据日期、天气和我的最近听歌记录，生成一期自然的中文电台脚本。\n"
+        "关键要求：\n"
         f"- 日期：{today.isoformat()}\n"
         f"- 标题：{title}\n"
         f"- 天气：{weather_line}\n"
         f"- 选择 {track_count} 首歌，优先从最近听歌记录里选；如果推荐新歌，必须给出歌名和歌手。\n"
-        "- 开场要介绍天气、今天适合听什么、每首歌为什么推荐，然后自然进入播放。\n"
-        "- 结束语要收束今天的情绪，不要像测试文本。\n"
+        "- intro 是开场口播，会在所有歌曲播放前一次性播完；不要写“接下来第一首/第二首马上播放”这种机械串词。\n"
+        "- intro 要包含：今天的天气、这期歌单的整体情绪、每首歌 1 句具体推荐理由，最后自然进入播放。\n"
+        "- outro 是所有歌曲播完后的收尾，像晚一点回头总结，不要像广告语。\n"
+        "- 口吻要口语化、温和、私人化，可以有一点停顿感，但不要油腻，不要喊口号。\n"
+        "- 禁止出现：测试音频、生成中、推荐理由：、第 1 首、今天的节目到这里、感谢收听。\n"
+        "- intro 控制在 260 到 420 个中文字符；outro 控制在 80 到 160 个中文字符。\n"
         "- 只输出 JSON，不要 markdown，不要额外解释。\n"
         "JSON 格式："
         '{"title":"...","intro":"...","tracks":[{"title":"...","artist":"...","album":"可空","reason":"..."}],"outro":"..."}\n'

@@ -183,6 +183,21 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     }
   }
 
+  void _upsertRadioEpisode(Map<dynamic, dynamic> episode) {
+    final nextEpisode = Map<String, dynamic>.from(episode);
+    final id = nextEpisode['id']?.toString() ?? '';
+    setState(() {
+      if (id.isEmpty) {
+        _radioEpisodes = [nextEpisode, ..._radioEpisodes];
+        return;
+      }
+      _radioEpisodes = [
+        nextEpisode,
+        ..._radioEpisodes.where((item) => item['id']?.toString() != id),
+      ];
+    });
+  }
+
   Future<void> _generateRadioEpisode() async {
     setState(() {
       _radioGenerating = true;
@@ -193,12 +208,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       final episode = result['episode'];
       if (!mounted) return;
       if (episode is Map) {
-        setState(() {
-          _radioEpisodes = [
-            Map<String, dynamic>.from(episode),
-            ..._radioEpisodes,
-          ];
-        });
+        _upsertRadioEpisode(episode);
       }
       await _loadRadioStatus();
       await _loadRadioEpisodes();
@@ -222,12 +232,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       final episode = result['episode'];
       if (!mounted) return;
       if (episode is Map) {
-        setState(() {
-          _radioEpisodes = [
-            Map<String, dynamic>.from(episode),
-            ..._radioEpisodes,
-          ];
-        });
+        _upsertRadioEpisode(episode);
       }
       await _loadDailyRadioStatus();
       await _loadRadioStatus();

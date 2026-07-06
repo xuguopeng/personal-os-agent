@@ -173,3 +173,4 @@
 - Flutter macOS 窗口体验修正：原生窗口默认改为 `1440x900`、最小 `1180x760` 并居中打开；macOS 标题栏改为透明隐藏标题，内容延伸到标题栏区域，去掉页面内伪造的最小化/关闭按钮；左侧导航和右侧信息栏增加滚动/高度约束，底部播放栏缩到 108px，减少小窗口 overflow。
 - Flutter 桌面音乐页第一轮模块拆分：`desktop_music_home.dart` 从 3489 行降到 1889 行；新增 `pages/desktop_music/desktop_music_models.dart`、`desktop_music_background.dart`、`desktop_music_reference_widgets.dart`、`desktop_music_library_widgets.dart`，把视图枚举、星点背景、参考图风格按钮/卡片/导航、电台条目等拆出；删除旧桌面 UI 残留组件，并把新顶部“导入音乐/刷新”接回 sqmusic 下载和增量扫描逻辑。
 - Docker Compose 服务命名更新：服务名从 `agent-server` 改为 `music-server`，容器名从 `personal-os-agent-server` 改为 `mu-music-server`；数据卷和 SQLite 路径暂时保留原值，避免 NAS 重新部署后丢失已有数据和密钥。
+- 今日电台重复生成修正：`/v1/music/radio/daily/build` 默认复用当天已经合成好的 ffmpeg 电台节目，不再每次点击都生成重复音频；客户端按 `episode.id` 去重更新列表。MiniMax Chat 电台 prompt 改为更口语化的私人主持人口吻，避免“测试音频、生成中、推荐理由”等生硬文案。
