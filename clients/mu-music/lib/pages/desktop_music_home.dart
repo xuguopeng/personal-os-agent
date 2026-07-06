@@ -12,6 +12,8 @@ part 'desktop_music/desktop_music_background.dart';
 part 'desktop_music/desktop_music_reference_widgets.dart';
 part 'desktop_music/desktop_music_library_widgets.dart';
 
+enum _VerticalDjPanel { chat, player, profile }
+
 class DesktopMusicHome extends StatefulWidget {
   DesktopMusicHome({super.key});
 
@@ -53,6 +55,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   String? _radioError;
   String? _toolMessage;
   String? _hoveredTrackId;
+  _VerticalDjPanel _verticalPanel = _VerticalDjPanel.chat;
 
   @override
   void initState() {
@@ -592,18 +595,860 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   Widget _buildVerticalDjApp() {
     return _ClaudioParticleField(
+      interactive: _verticalPanel == _VerticalDjPanel.profile,
+      focusMode: _verticalPanel == _VerticalDjPanel.profile,
+      lyricPulse: _verticalPanel == _VerticalDjPanel.player,
       child: SafeArea(
         child: Padding(
-          padding: EdgeInsets.fromLTRB(18, 16, 18, 18),
+          padding: EdgeInsets.fromLTRB(14, 12, 14, 14),
           child: Center(
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 460),
-              child: _buildClaudioPhoneCard(embeddedChat: true),
+              constraints: BoxConstraints(maxWidth: 492),
+              child: Column(
+                children: [
+                  _buildVerticalTopBar(),
+                  SizedBox(height: 10),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: Duration(milliseconds: 260),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      child: _buildVerticalPanel(),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildVerticalTopBar() {
+    return Container(
+      height: 58,
+      padding: EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: (AppColors.isDark ? Color(0xFF111018) : Colors.white)
+            .withValues(alpha: AppColors.isDark ? 0.78 : 0.9),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.borderColor),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                Text(
+                  'Muo',
+                  style: TextStyle(
+                    color: AppColors.primaryBtn,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0,
+                  ),
+                ),
+                SizedBox(width: 8),
+                Text(
+                  'FM',
+                  style: TextStyle(
+                    color: AppColors.primaryText,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _buildVerticalPanelButton('CHAT', _VerticalDjPanel.chat),
+          _buildVerticalPanelButton('ON AIR', _VerticalDjPanel.player),
+          _buildVerticalPanelButton('ME', _VerticalDjPanel.profile),
+          SizedBox(width: 8),
+          _buildThemeSegment(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVerticalPanelButton(String label, _VerticalDjPanel panel) {
+    final active = _verticalPanel == panel;
+    return Padding(
+      padding: EdgeInsets.only(left: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => setState(() => _verticalPanel = panel),
+        child: Container(
+          height: 34,
+          padding: EdgeInsets.symmetric(horizontal: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? AppColors.primaryBtn
+                : Colors.white.withValues(alpha: AppColors.isDark ? 0.06 : 0),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: active ? AppColors.primaryBtn : AppColors.borderColor,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: active ? Colors.white : AppColors.secondaryText,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemeSegment() {
+    return GetBuilder<ThemeStore>(
+      builder: (themeStore) {
+        return Container(
+          height: 34,
+          padding: EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color:
+                Colors.black.withValues(alpha: AppColors.isDark ? 0.24 : 0.06),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppColors.borderColor),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildThemeChoice(
+                label: 'DARK',
+                active: themeStore.darkMode,
+                onTap: () => themeStore.setDarkMode(true),
+              ),
+              _buildThemeChoice(
+                label: 'LIGHT',
+                active: !themeStore.darkMode,
+                onTap: () => themeStore.setDarkMode(false),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildThemeChoice({
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        height: 26,
+        padding: EdgeInsets.symmetric(horizontal: 9),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: active
+              ? (AppColors.isDark ? Colors.white : Color(0xFF111111))
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: active
+                ? (AppColors.isDark ? Color(0xFF111111) : Colors.white)
+                : AppColors.secondaryText,
+            fontSize: 9,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVerticalPanel() {
+    switch (_verticalPanel) {
+      case _VerticalDjPanel.player:
+        return _buildVerticalPlayerPage(key: ValueKey('player'));
+      case _VerticalDjPanel.profile:
+        return _buildVerticalProfilePage(key: ValueKey('profile'));
+      case _VerticalDjPanel.chat:
+        return _buildVerticalChatPage(key: ValueKey('chat'));
+    }
+  }
+
+  Widget _buildVerticalChatPage({required Key key}) {
+    final latest = _radioEpisodes.isNotEmpty ? _radioEpisodes.first : null;
+    final tracks = _radioEpisodeTracks(latest);
+    final current = _globalPlayerStore.currentTrack ?? tracks.firstOrNull;
+    final title = current?['title']?.toString() ?? 'If - Bread';
+    final artist = current?['artist']?.toString() ?? '私人 DJ';
+    final intro = _radioScriptPlan(latest)['intro']?.toString() ??
+        'Tell me your mood. I will turn it into a station.';
+    return Container(
+      key: key,
+      decoration: _verticalShellDecoration(),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: Column(
+          children: [
+            Container(
+              height: 220,
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 0),
+              color: AppColors.isDark ? Color(0xFF06070A) : Color(0xFFF8F8F8),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: _buildPixelLogo('Claudio')),
+                      Text(
+                        _clockLabel(),
+                        style: TextStyle(
+                          color: AppColors.primaryText,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Spacer(),
+                  Text(
+                    _largeClockLabel(),
+                    style: TextStyle(
+                      color: AppColors.primaryText,
+                      fontSize: 62,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Monday · ON AIR',
+                    style: TextStyle(
+                      color: AppColors.secondaryText,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(height: 22),
+                ],
+              ),
+            ),
+            Container(
+              height: 78,
+              padding: EdgeInsets.symmetric(horizontal: 18),
+              decoration: BoxDecoration(
+                color: AppColors.isDark ? Color(0xFF101015) : Color(0xFFFFFFFF),
+                border: Border.symmetric(
+                  horizontal: BorderSide(color: AppColors.borderColor),
+                ),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 36,
+                    child: _RadioWaveform(
+                      active: _musicController.isPlaying,
+                      color: AppColors.primaryBtn,
+                      inactiveColor: AppColors.secondaryText,
+                      barCount: 8,
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppColors.primaryText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          artist,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppColors.secondaryText,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _buildRoundPlayerButton(
+                    icon: Icons.skip_previous_rounded,
+                    onTap: _musicController.playPrevious,
+                  ),
+                  _buildRoundPlayerButton(
+                    icon: _musicController.isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    strong: true,
+                    onTap: _musicController.togglePlayPause,
+                  ),
+                  _buildRoundPlayerButton(
+                    icon: Icons.skip_next_rounded,
+                    onTap: _musicController.playNext,
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(18, 18, 18, 12),
+                child: Column(
+                  children: [
+                    Expanded(child: _buildClaudioEmbeddedChat(intro)),
+                    SizedBox(height: 12),
+                    _buildClaudioEmbeddedInput(
+                        latest, _musicController.isPlaying),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVerticalPlayerPage({required Key key}) {
+    final latest = _radioEpisodes.isNotEmpty ? _radioEpisodes.first : null;
+    final tracks = _radioEpisodeTracks(latest);
+    final current = _globalPlayerStore.currentTrack ?? tracks.firstOrNull;
+    final title = current?['title']?.toString() ??
+        latest?['title']?.toString() ??
+        'Monday Night Exhale';
+    final artist = current?['artist']?.toString() ?? 'Muo FM';
+    final intro = _radioScriptPlan(latest)['intro']?.toString() ??
+        'This is Muo FM. Your evening station is ready.';
+    return Container(
+      key: key,
+      decoration: _verticalShellDecoration(),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: Column(
+          children: [
+            Container(
+              height: 245,
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 0),
+              color: AppColors.isDark ? Color(0xFF050608) : Color(0xFFF7F7F5),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: _buildPixelLogo('Claudio')),
+                      Text(
+                        _musicController.formatDuration(
+                          _musicController.currentPosition,
+                        ),
+                        style: TextStyle(
+                          color: AppColors.primaryText,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Spacer(),
+                  SizedBox(
+                    height: 108,
+                    child: _RadioWaveform(
+                      active: true,
+                      color:
+                          AppColors.isDark ? Colors.white : Color(0xFF111111),
+                      inactiveColor: AppColors.secondaryText,
+                      barCount: 64,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Transform.translate(
+                offset: Offset(0, -24),
+                child: Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.fromLTRB(26, 28, 26, 14),
+                  decoration: BoxDecoration(
+                    color: AppColors.isDark ? Color(0xFFEEECE5) : Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(32),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Color(0xFF111111),
+                          fontSize: 32,
+                          height: 1.02,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        artist,
+                        style: TextStyle(
+                          color: Color(0xFF77736D),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      SizedBox(height: 18),
+                      _buildLivePlayerProgress(),
+                      SizedBox(height: 18),
+                      Expanded(child: _buildLiveLyrics(intro)),
+                      SizedBox(height: 10),
+                      _buildPlayerBottomControls(latest),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVerticalProfilePage({required Key key}) {
+    final remembered = _radioMemories
+        .where((item) => item['status']?.toString() == 'remembered')
+        .toList();
+    final tags = <String>[
+      '90s 华语',
+      '夜晚',
+      '轻松治愈',
+      'JAZZ-HIPHOP',
+      'ROCK',
+      '雨天白噪音',
+      'POST-PUNK',
+      'NAS 音乐库',
+    ];
+    return Container(
+      key: key,
+      decoration: _verticalShellDecoration(),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(28, 30, 28, 26),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 92,
+                  height: 92,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        AppColors.primaryBtn.withValues(alpha: 0.95),
+                        Color(0xFF16161E),
+                      ],
+                    ),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.16),
+                    ),
+                  ),
+                  child: Icon(Icons.graphic_eq_rounded,
+                      color: Colors.white, size: 38),
+                ),
+                SizedBox(width: 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildPixelLogo('Claudio'),
+                      SizedBox(height: 8),
+                      Text(
+                        '一开机我就打碟',
+                        style: TextStyle(
+                          color: Color(0xFF29FFB8),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 34),
+            Text(
+              '徐郭鹏的私人 DJ，会记住你的 taste.md。',
+              style: TextStyle(
+                color: AppColors.primaryText,
+                fontSize: 18,
+                height: 1.45,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Your mood is my prompt.\nI hate algorithm. I have taste.',
+              style: TextStyle(
+                color: AppColors.secondaryText,
+                fontSize: 15,
+                height: 1.55,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            SizedBox(height: 30),
+            Divider(color: AppColors.borderColor),
+            SizedBox(height: 24),
+            Row(
+              children: [
+                _buildProfileStat('ON AIR', '24/7'),
+                _buildProfileStat('GENRES', '∞'),
+                _buildProfileStat('MEMORY', '${remembered.length}'),
+              ],
+            ),
+            SizedBox(height: 30),
+            Text(
+              'TASTE TAGS',
+              style: TextStyle(
+                color: AppColors.secondaryText,
+                fontSize: 11,
+                letterSpacing: 1.6,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final tag in tags) _buildTasteChip(tag),
+              ],
+            ),
+            Spacer(),
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.black
+                    .withValues(alpha: AppColors.isDark ? 0.28 : 0.04),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: AppColors.borderColor),
+              ),
+              child: Text(
+                remembered.isEmpty
+                    ? '还没有确认的长期画像。你在聊天里说“以后晚上多放轻一点”，我会先作为候选，等你确认后再记住。'
+                    : remembered
+                        .take(2)
+                        .map((item) => item['title']?.toString() ?? '音乐偏好')
+                        .join('\n'),
+                style: TextStyle(
+                  color: AppColors.secondaryText,
+                  fontSize: 13,
+                  height: 1.55,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  BoxDecoration _verticalShellDecoration() {
+    return BoxDecoration(
+      color: (AppColors.isDark ? Color(0xFF111018) : Color(0xFFFDFDFC))
+          .withValues(alpha: AppColors.isDark ? 0.86 : 0.94),
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: AppColors.borderColor),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: AppColors.isDark ? 0.44 : 0.10),
+          blurRadius: 40,
+          offset: Offset(0, 20),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPixelLogo(String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppColors.primaryBtn.withValues(alpha: 0.92),
+          ),
+          child: Icon(Icons.radio_rounded, color: Colors.white, size: 18),
+        ),
+        SizedBox(width: 10),
+        Text(
+          label,
+          style: TextStyle(
+            color: AppColors.primaryText,
+            fontSize: 30,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1.4,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRoundPlayerButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    bool strong = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(left: 8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          width: strong ? 38 : 32,
+          height: strong ? 38 : 32,
+          decoration: BoxDecoration(
+            color: strong ? AppColors.primaryBtn : Colors.transparent,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: strong ? AppColors.primaryBtn : AppColors.borderColor,
+            ),
+          ),
+          child: Icon(
+            icon,
+            color: strong ? Colors.white : AppColors.primaryText,
+            size: strong ? 22 : 18,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLivePlayerProgress() {
+    final total = _musicController.totalDuration > 0
+        ? _musicController.totalDuration
+        : 207000;
+    final current = _musicController.currentPosition.clamp(0, total);
+    final progress = total <= 0 ? 0.0 : current / total;
+    return Row(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: _musicController.togglePlayPause,
+          child: Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: Color(0xFF111111),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              _musicController.isPlaying ? Icons.pause : Icons.play_arrow,
+              color: Colors.white,
+              size: 16,
+            ),
+          ),
+        ),
+        SizedBox(width: 12),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              minHeight: 3,
+              value: progress,
+              backgroundColor: Color(0xFFD9D6CF),
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF111111)),
+            ),
+          ),
+        ),
+        SizedBox(width: 12),
+        Text(
+          '${_musicController.formatDuration(current)} / ${_musicController.formatDuration(total)}',
+          style: TextStyle(
+            color: Color(0xFF77736D),
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLiveLyrics(String fallback) {
+    final lyrics = _musicController.lyrics;
+    final fallbackLines = _splitRadioTranscript(fallback);
+    final itemCount = lyrics.isNotEmpty ? lyrics.length : fallbackLines.length;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(16, 14, 16, 10),
+      decoration: BoxDecoration(
+        color: Color(0xFFEDEBE5),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: itemCount == 0
+          ? Center(
+              child: Text(
+                '歌词会跟随播放滚动。',
+                style: TextStyle(color: Color(0xFF8F8D87)),
+              ),
+            )
+          : Obx(
+              () {
+                final activeIndex = lyrics.isNotEmpty
+                    ? _musicController.currentLyricIndex
+                    : ((_musicController.currentPosition ~/ 4200) %
+                        math.max(1, itemCount));
+                return ListView.builder(
+                  controller: lyrics.isNotEmpty
+                      ? _musicController.lyricScrollController
+                      : null,
+                  padding: EdgeInsets.zero,
+                  itemCount: itemCount,
+                  itemBuilder: (context, index) {
+                    final text = lyrics.isNotEmpty
+                        ? lyrics[index].text
+                        : fallbackLines[index];
+                    final active = index == activeIndex;
+                    return AnimatedContainer(
+                      duration: Duration(milliseconds: 220),
+                      margin: EdgeInsets.only(bottom: 10),
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: active
+                            ? AppColors.primaryBtn.withValues(alpha: 0.16)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        text,
+                        style: TextStyle(
+                          color: active ? Color(0xFF111111) : Color(0xFFB3AFA7),
+                          fontSize: active ? 17 : 15,
+                          height: 1.35,
+                          fontWeight:
+                              active ? FontWeight.w900 : FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+    );
+  }
+
+  Widget _buildPlayerBottomControls(Map<String, dynamic>? latest) {
+    return Row(
+      children: [
+        Text(
+          '0:00',
+          style: TextStyle(
+            color: Color(0xFF111111),
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        SizedBox(width: 10),
+        Expanded(
+          child: SizedBox(
+            height: 28,
+            child: _RadioWaveform(
+              active: true,
+              color: Color(0xFF111111),
+              inactiveColor: Color(0xFFC9C6BE),
+              barCount: 42,
+            ),
+          ),
+        ),
+        SizedBox(width: 10),
+        InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: latest == null
+              ? _runDailyRadioNow
+              : () => _playRadioEpisode(latest),
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Color(0xFF111111),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.pause, color: Colors.white, size: 22),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProfileStat(String label, String value) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: AppColors.secondaryText,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.4,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              color: AppColors.primaryText,
+              fontSize: 25,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTasteChip(String label) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: AppColors.isDark ? 0.18 : 0.04),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.borderColor),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: AppColors.primaryText,
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+
+  String _largeClockLabel() {
+    final now = DateTime.now();
+    return '${now.hour.toString().padLeft(2, '0')} ${now.minute.toString().padLeft(2, '0')}';
   }
 
   Widget _buildReferenceSidebar() {

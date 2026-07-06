@@ -73,9 +73,17 @@ class _StarFieldPainter extends CustomPainter {
 }
 
 class _ClaudioParticleField extends StatefulWidget {
-  _ClaudioParticleField({required this.child});
+  _ClaudioParticleField({
+    required this.child,
+    this.interactive = false,
+    this.focusMode = false,
+    this.lyricPulse = false,
+  });
 
   final Widget child;
+  final bool interactive;
+  final bool focusMode;
+  final bool lyricPulse;
 
   @override
   State<_ClaudioParticleField> createState() => _ClaudioParticleFieldState();
@@ -84,6 +92,7 @@ class _ClaudioParticleField extends StatefulWidget {
 class _ClaudioParticleFieldState extends State<_ClaudioParticleField>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  Offset? _pointer;
 
   @override
   void initState() {
@@ -105,12 +114,23 @@ class _ClaudioParticleFieldState extends State<_ClaudioParticleField>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
-        return CustomPaint(
-          painter: _ClaudioParticlePainter(
-            progress: _controller.value,
-            isDark: AppColors.isDark,
+        return MouseRegion(
+          onHover: widget.interactive
+              ? (event) => setState(() => _pointer = event.localPosition)
+              : null,
+          onExit: widget.interactive
+              ? (_) => setState(() => _pointer = null)
+              : null,
+          child: CustomPaint(
+            painter: _ClaudioParticlePainter(
+              progress: _controller.value,
+              isDark: AppColors.isDark,
+              pointer: _pointer,
+              focusMode: widget.focusMode,
+              lyricPulse: widget.lyricPulse,
+            ),
+            child: widget.child,
           ),
-          child: widget.child,
         );
       },
     );
@@ -121,10 +141,16 @@ class _ClaudioParticlePainter extends CustomPainter {
   _ClaudioParticlePainter({
     required this.progress,
     required this.isDark,
+    required this.pointer,
+    required this.focusMode,
+    required this.lyricPulse,
   });
 
   final double progress;
   final bool isDark;
+  final Offset? pointer;
+  final bool focusMode;
+  final bool lyricPulse;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -149,20 +175,54 @@ class _ClaudioParticlePainter extends CustomPainter {
         ).createShader(rect),
     );
 
-    final center = Offset(size.width * 0.46, size.height * 0.44);
+    final pointerPoint = pointer;
+    final center = pointerPoint ??
+        Offset(size.width * (focusMode ? 0.58 : 0.46), size.height * 0.44);
     final particlePaint = Paint()..style = PaintingStyle.fill;
     final glowPaint = Paint()
       ..shader = RadialGradient(
         colors: [
-          AppColors.primaryBtn.withValues(alpha: isDark ? 0.16 : 0.10),
-          Color(0xFF6D5DFF).withValues(alpha: isDark ? 0.18 : 0.08),
+          AppColors.primaryBtn.withValues(alpha: isDark ? 0.18 : 0.12),
+          Color(0xFF29FFB8).withValues(
+            alpha: focusMode ? (isDark ? 0.18 : 0.10) : 0.03,
+          ),
+          Color(0xFF6D5DFF).withValues(alpha: isDark ? 0.14 : 0.06),
           Colors.transparent,
         ],
       ).createShader(
-          Rect.fromCircle(center: center, radius: size.width * 0.34));
+          Rect.fromCircle(center: center, radius: size.width * 0.44));
     canvas.drawRect(rect, glowPaint);
 
-    final count = isDark ? 1250 : 760;
+    final gridPaint = Paint()
+      ..color = (isDark ? Colors.white : Color(0xFF111111))
+          .withValues(alpha: isDark ? 0.09 : 0.06);
+    final spacing = focusMode ? 16.0 : 18.0;
+    for (var y = 8.0; y < size.height; y += spacing) {
+      for (var x = 8.0; x < size.width; x += spacing) {
+        final distance = pointerPoint == null
+            ? 9999.0
+            : (Offset(x, y) - pointerPoint).distance;
+        final pull = focusMode ? (1 - (distance / 190)).clamp(0.0, 1.0) : 0.0;
+        final dot = Offset.lerp(
+              Offset(x, y),
+              center +
+                  Offset(
+                    math.sin((x + progress * 300) * 0.025) * 90,
+                    math.cos((y + progress * 260) * 0.025) * 68,
+                  ),
+              pull * 0.34,
+            ) ??
+            Offset(x, y);
+        gridPaint.color = (pull > 0
+                ? Color(0xFF29FFB8)
+                : (isDark ? Colors.white : Color(0xFF111111)))
+            .withValues(alpha: (isDark ? 0.08 : 0.05) + pull * 0.42);
+        canvas.drawCircle(dot, 0.75 + pull * 1.1, gridPaint);
+      }
+    }
+
+    final pulse = lyricPulse ? 0.12 * math.sin(progress * math.pi * 2) : 0.0;
+    final count = focusMode ? 1500 : (isDark ? 900 : 620);
     for (var i = 0; i < count; i++) {
       final seedA = _noise(i * 17.13);
       final seedB = _noise(i * 41.79);
@@ -171,8 +231,12 @@ class _ClaudioParticlePainter extends CustomPainter {
           seedA * math.pi * 2 + progress * math.pi * (0.24 + seedC * 0.22);
       final radiusBase = math.pow(seedB, 0.58).toDouble();
       final wave = math.sin(progress * math.pi * 2 + i * 0.023) * 0.08;
-      final ovalX = size.width * (0.13 + radiusBase * (0.31 + wave));
-      final ovalY = size.height * (0.10 + radiusBase * (0.25 - wave * 0.3));
+      final focusScale = focusMode ? 0.74 : 1.0;
+      final ovalX =
+          size.width * (0.12 + radiusBase * (0.29 + wave + pulse)) * focusScale;
+      final ovalY = size.height *
+          (0.09 + radiusBase * (0.23 - wave * 0.3 + pulse * 0.4)) *
+          focusScale;
       final swirl = Offset(
         math.cos(angle) * ovalX + math.sin(angle * 1.9) * 18,
         math.sin(angle) * ovalY + math.cos(angle * 1.4) * 16,
@@ -184,10 +248,13 @@ class _ClaudioParticlePainter extends CustomPainter {
       final p = center + swirl + drift;
       if (!rect.inflate(20).contains(p)) continue;
       final alpha = isDark ? 0.10 + seedC * 0.42 : 0.05 + seedC * 0.18;
-      final warm = seedA > 0.72;
+      final warm = seedA > (focusMode ? 0.58 : 0.72);
       particlePaint.color =
-          (warm ? AppColors.primaryBtn : Colors.white).withValues(alpha: alpha);
-      canvas.drawCircle(p, 0.35 + seedC * 1.15, particlePaint);
+          (warm ? AppColors.primaryBtn : Colors.white).withValues(
+        alpha: focusMode ? alpha * 1.15 : alpha,
+      );
+      canvas.drawCircle(
+          p, 0.35 + seedC * (focusMode ? 1.6 : 1.15), particlePaint);
     }
   }
 
@@ -198,6 +265,10 @@ class _ClaudioParticlePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ClaudioParticlePainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.isDark != isDark;
+    return oldDelegate.progress != progress ||
+        oldDelegate.isDark != isDark ||
+        oldDelegate.pointer != pointer ||
+        oldDelegate.focusMode != focusMode ||
+        oldDelegate.lyricPulse != lyricPulse;
   }
 }
