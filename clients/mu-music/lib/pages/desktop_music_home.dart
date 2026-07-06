@@ -6,6 +6,11 @@ import 'package:get_storage/get_storage.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
 import 'package:mu_music/common/index.dart';
 
+part 'desktop_music/desktop_music_models.dart';
+part 'desktop_music/desktop_music_background.dart';
+part 'desktop_music/desktop_music_reference_widgets.dart';
+part 'desktop_music/desktop_music_library_widgets.dart';
+
 class DesktopMusicHome extends StatefulWidget {
   DesktopMusicHome({super.key});
 
@@ -15,6 +20,8 @@ class DesktopMusicHome extends StatefulWidget {
 
 class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _downloadSearchController =
+      TextEditingController();
   final GetStorage _storage = GetStorage();
   final PlaylistStore _playlistStore = Get.find<PlaylistStore>();
   final GlobalMusicController _musicController =
@@ -33,8 +40,12 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   bool _radioLoading = false;
   bool _radioGenerating = false;
   bool _dailyRadioGenerating = false;
+  bool _scanRunning = false;
+  bool _sqmusicSearching = false;
+  bool _sqmusicDownloading = false;
   String? _error;
   String? _radioError;
+  String? _toolMessage;
   String? _hoveredTrackId;
 
   @override
@@ -51,6 +62,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   @override
   void dispose() {
     _searchController.dispose();
+    _downloadSearchController.dispose();
     super.dispose();
   }
 
@@ -172,18 +184,12 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   }
 
   Future<void> _generateRadioEpisode() async {
-    final seedTracks = _visibleTracks().isNotEmpty ? _visibleTracks() : _tracks;
-    final trackIds = seedTracks
-        .map((track) => track['id']?.toString() ?? '')
-        .where((id) => id.isNotEmpty)
-        .take(10)
-        .toList();
     setState(() {
       _radioGenerating = true;
       _radioError = null;
     });
     try {
-      final result = await NasMusicApi.createRadioJob(trackIds: trackIds);
+      final result = await NasMusicApi.buildDailyRadioMix(trackCount: 3);
       final episode = result['episode'];
       if (!mounted) return;
       if (episode is Map) {
@@ -212,7 +218,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       _radioError = null;
     });
     try {
-      final result = await NasMusicApi.runDailyRadioNow();
+      final result = await NasMusicApi.buildDailyRadioMix(trackCount: 3);
       final episode = result['episode'];
       if (!mounted) return;
       if (episode is Map) {
@@ -236,6 +242,219 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     }
   }
 
+  Future<void> _runLibraryScan({required bool incremental}) async {
+    setState(() {
+      _scanRunning = true;
+      _toolMessage = incremental ? '正在增量扫描曲库...' : '正在全量扫描曲库...';
+      _error = null;
+    });
+    try {
+      final result = await NasMusicApi.scanLibrary(incremental: incremental);
+      final imported = result['imported']?.toString() ?? '0';
+      final scanned = result['scanned']?.toString() ?? '0';
+      if (!mounted) return;
+      setState(() {
+        _toolMessage =
+            '${incremental ? '增量' : '全量'}扫描完成：扫描 $scanned，导入 $imported。';
+      });
+      await _loadTracks(_searchController.text);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _toolMessage = '扫描失败：$error');
+    } finally {
+      if (mounted) {
+        setState(() => _scanRunning = false);
+      }
+    }
+  }
+
+  Future<void> _showSqmusicDownloadDialog() async {
+    _downloadSearchController.text =
+        _searchController.text.trim().isNotEmpty ? _searchController.text : '';
+    var results = <Map<String, dynamic>>[];
+    String? dialogMessage;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> runSearch() async {
+              final keyword = _downloadSearchController.text.trim();
+              if (keyword.isEmpty) {
+                setDialogState(() => dialogMessage = '请输入歌名或歌手。');
+                return;
+              }
+              setDialogState(() {
+                _sqmusicSearching = true;
+                dialogMessage = null;
+              });
+              try {
+                final items = await NasMusicApi.searchSqmusic(
+                  keyword: keyword,
+                  pageSize: 20,
+                );
+                setDialogState(() {
+                  results = items;
+                  dialogMessage = items.isEmpty ? '没有搜索到可下载歌曲。' : null;
+                });
+              } catch (error) {
+                setDialogState(() => dialogMessage = '搜索失败：$error');
+              } finally {
+                setDialogState(() => _sqmusicSearching = false);
+              }
+            }
+
+            Future<void> download(Map<String, dynamic> track) async {
+              setDialogState(() {
+                _sqmusicDownloading = true;
+                dialogMessage = '正在提交下载任务...';
+              });
+              try {
+                final result = await NasMusicApi.downloadSqmusicTrack(track);
+                if (result['ok'] == true) {
+                  setDialogState(() => dialogMessage = '已提交下载，正在扫描曲库...');
+                  await NasMusicApi.rescanSqmusicDownloads();
+                  if (mounted) {
+                    await _loadTracks(_searchController.text);
+                  }
+                  setDialogState(() => dialogMessage = '下载任务已提交，曲库已刷新。');
+                } else {
+                  setDialogState(() {
+                    dialogMessage = result['message']?.toString() ?? '下载失败。';
+                  });
+                }
+              } catch (error) {
+                setDialogState(() => dialogMessage = '下载失败：$error');
+              } finally {
+                setDialogState(() => _sqmusicDownloading = false);
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: AppColors.navigationBg,
+              title: Text(
+                'sqmusic 下载',
+                style: TextStyle(color: AppColors.primaryText),
+              ),
+              content: SizedBox(
+                width: 620,
+                height: 500,
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _downloadSearchController,
+                            style: TextStyle(color: AppColors.primaryText),
+                            decoration: InputDecoration(
+                              hintText: '搜索歌名、歌手或专辑',
+                              hintStyle:
+                                  TextStyle(color: AppColors.secondaryText),
+                            ),
+                            onSubmitted: (_) => runSearch(),
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        ElevatedButton.icon(
+                          onPressed: _sqmusicSearching ? null : runSearch,
+                          icon: _sqmusicSearching
+                              ? SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: _buildTinyLoading(Colors.white),
+                                )
+                              : Icon(Icons.search, size: 17),
+                          label: Text(_sqmusicSearching ? '搜索中' : '搜索'),
+                        ),
+                      ],
+                    ),
+                    if (dialogMessage != null) ...[
+                      SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          dialogMessage!,
+                          style: TextStyle(
+                            color: AppColors.secondaryText,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: 12),
+                    Expanded(
+                      child: results.isEmpty
+                          ? Center(
+                              child: Text(
+                                '搜索后选择一首歌下载',
+                                style:
+                                    TextStyle(color: AppColors.secondaryText),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: results.length,
+                              separatorBuilder: (_, __) =>
+                                  Divider(color: AppColors.borderColor),
+                              itemBuilder: (context, index) {
+                                final item = results[index];
+                                final title = item['name']?.toString() ?? '';
+                                final artist =
+                                    item['artistName']?.toString() ?? '';
+                                final album =
+                                    item['albumName']?.toString() ?? '';
+                                final br =
+                                    item['preferredBrType']?.toString() ?? '';
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(
+                                    title,
+                                    style:
+                                        TextStyle(color: AppColors.primaryText),
+                                  ),
+                                  subtitle: Text(
+                                    '$artist · $album · $br',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: AppColors.secondaryText,
+                                    ),
+                                  ),
+                                  trailing: TextButton(
+                                    onPressed: _sqmusicDownloading
+                                        ? null
+                                        : () => download(item),
+                                    child: Text(
+                                      _sqmusicDownloading ? '处理中' : '下载',
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('关闭'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (mounted) {
+      setState(() {
+        _sqmusicSearching = false;
+        _sqmusicDownloading = false;
+      });
+    }
+  }
+
   Future<void> _playRadioEpisode(Map<String, dynamic> episode) async {
     final playlist = NasMusicApi.normalizeRadioEpisodePlaylist(episode);
     if (playlist.isEmpty) return;
@@ -252,20 +471,18 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       body: Stack(
         children: [
           Positioned.fill(child: _StarFieldBackground()),
-          SafeArea(
-            child: Column(
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      _buildReferenceSidebar(),
-                      Expanded(child: _buildReferenceWorkspace()),
-                    ],
-                  ),
+          Column(
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    _buildReferenceSidebar(),
+                    Expanded(child: _buildReferenceWorkspace()),
+                  ],
                 ),
-                _buildReferencePlayerBar(),
-              ],
-            ),
+              ),
+              _buildReferencePlayerBar(),
+            ],
           ),
         ],
       ),
@@ -279,127 +496,134 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
         color: Colors.black.withValues(alpha: AppColors.isDark ? 0.48 : 0.06),
         border: Border(right: BorderSide(color: AppColors.borderColor)),
       ),
-      padding: EdgeInsets.fromLTRB(28, 30, 18, 22),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '沐音',
-            style: TextStyle(
-              color: AppColors.primaryBtn,
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0,
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.fromLTRB(28, 46, 18, 16),
+              children: [
+                Text(
+                  '沐音',
+                  style: TextStyle(
+                    color: AppColors.primaryBtn,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0,
+                  ),
+                ),
+                SizedBox(height: 34),
+                _ReferenceNavItem(
+                  active: _viewMode == _DesktopMusicViewMode.tracks,
+                  icon: Icons.music_note_outlined,
+                  label: '音乐库',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.tracks;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                _ReferenceNavItem(
+                  active: _viewMode == _DesktopMusicViewMode.radio,
+                  icon: Icons.radio_outlined,
+                  label: '今日电台',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.radio;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                _ReferenceNavItem(
+                  active: _viewMode == _DesktopMusicViewMode.artists,
+                  icon: Icons.person_outline,
+                  label: '歌手',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.artists;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                _ReferenceNavItem(
+                  active: false,
+                  icon: Icons.album_outlined,
+                  label: '专辑',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.tracks;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                _ReferenceNavItem(
+                  active: _viewMode == _DesktopMusicViewMode.tracks,
+                  icon: Icons.queue_music_outlined,
+                  label: '歌曲',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.tracks;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                _ReferenceNavItem(
+                  active: _viewMode == _DesktopMusicViewMode.favorites,
+                  icon: Icons.favorite_border,
+                  label: '喜欢的音乐',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.favorites;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                SizedBox(height: 20),
+                Divider(color: AppColors.borderColor, height: 1),
+                SizedBox(height: 18),
+                _ReferenceNavItem(
+                  active: _viewMode == _DesktopMusicViewMode.history,
+                  icon: Icons.history,
+                  label: '播放记录',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.history;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                SizedBox(height: 20),
+                Divider(color: AppColors.borderColor, height: 1),
+                SizedBox(height: 18),
+                Padding(
+                  padding: EdgeInsets.only(left: 2, bottom: 10),
+                  child: Text(
+                    '播放 NAS',
+                    style: TextStyle(
+                      color: AppColors.secondaryText,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                _ReferenceNavItem(
+                  active: false,
+                  icon: Icons.storage_outlined,
+                  label: 'NAS 音乐库',
+                  onTap: () => setState(() {
+                    _viewMode = _DesktopMusicViewMode.tracks;
+                    _selectedArtistName = null;
+                  }),
+                ),
+                _ReferenceNavItem(
+                  active: false,
+                  icon: Icons.file_download_outlined,
+                  label: '本地导入',
+                  onTap: () {},
+                ),
+                _ReferenceNavItem(
+                  active: false,
+                  icon: Icons.sd_storage_outlined,
+                  label: '外接存储',
+                  onTap: () {},
+                ),
+              ],
             ),
           ),
-          SizedBox(height: 34),
-          _ReferenceNavItem(
-            active: _viewMode == _DesktopMusicViewMode.tracks,
-            icon: Icons.music_note_outlined,
-            label: '音乐库',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.tracks;
-              _selectedArtistName = null;
-            }),
-          ),
-          _ReferenceNavItem(
-            active: _viewMode == _DesktopMusicViewMode.radio,
-            icon: Icons.radio_outlined,
-            label: '今日电台',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.radio;
-              _selectedArtistName = null;
-            }),
-          ),
-          _ReferenceNavItem(
-            active: _viewMode == _DesktopMusicViewMode.artists,
-            icon: Icons.person_outline,
-            label: '歌手',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.artists;
-              _selectedArtistName = null;
-            }),
-          ),
-          _ReferenceNavItem(
-            active: false,
-            icon: Icons.album_outlined,
-            label: '专辑',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.tracks;
-              _selectedArtistName = null;
-            }),
-          ),
-          _ReferenceNavItem(
-            active: _viewMode == _DesktopMusicViewMode.tracks,
-            icon: Icons.queue_music_outlined,
-            label: '歌曲',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.tracks;
-              _selectedArtistName = null;
-            }),
-          ),
-          _ReferenceNavItem(
-            active: _viewMode == _DesktopMusicViewMode.favorites,
-            icon: Icons.favorite_border,
-            label: '喜欢的音乐',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.favorites;
-              _selectedArtistName = null;
-            }),
-          ),
-          SizedBox(height: 20),
-          Divider(color: AppColors.borderColor, height: 1),
-          SizedBox(height: 18),
-          _ReferenceNavItem(
-            active: _viewMode == _DesktopMusicViewMode.history,
-            icon: Icons.history,
-            label: '播放记录',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.history;
-              _selectedArtistName = null;
-            }),
-          ),
-          SizedBox(height: 20),
-          Divider(color: AppColors.borderColor, height: 1),
-          SizedBox(height: 18),
           Padding(
-            padding: EdgeInsets.only(left: 2, bottom: 10),
-            child: Text(
-              '播放 NAS',
-              style: TextStyle(
-                color: AppColors.secondaryText,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
+            padding: EdgeInsets.fromLTRB(28, 10, 18, 18),
+            child: _ReferenceNavItem(
+              active: false,
+              icon: Icons.settings_outlined,
+              label: '设置',
+              onTap: () => Get.find<ThemeStore>().toggleTheme(),
             ),
-          ),
-          _ReferenceNavItem(
-            active: false,
-            icon: Icons.storage_outlined,
-            label: 'NAS 音乐库',
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.tracks;
-              _selectedArtistName = null;
-            }),
-          ),
-          _ReferenceNavItem(
-            active: false,
-            icon: Icons.file_download_outlined,
-            label: '本地导入',
-            onTap: () {},
-          ),
-          _ReferenceNavItem(
-            active: false,
-            icon: Icons.sd_storage_outlined,
-            label: '外接存储',
-            onTap: () {},
-          ),
-          Spacer(),
-          _ReferenceNavItem(
-            active: false,
-            icon: Icons.settings_outlined,
-            label: '设置',
-            onTap: () => Get.find<ThemeStore>().toggleTheme(),
           ),
         ],
       ),
@@ -411,11 +635,26 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       children: [
         Expanded(
           child: Padding(
-            padding: EdgeInsets.fromLTRB(34, 30, 24, 0),
+            padding: EdgeInsets.fromLTRB(34, 46, 24, 0),
             child: Column(
               children: [
                 _buildReferenceToolbar(),
-                SizedBox(height: 34),
+                if (_toolMessage != null) ...[
+                  SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _toolMessage!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.secondaryText,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+                SizedBox(height: _toolMessage == null ? 34 : 20),
                 _buildReferenceTabs(),
                 SizedBox(height: 18),
                 Expanded(child: _buildReferenceCenter()),
@@ -425,7 +664,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
         ),
         Container(
           width: 330,
-          padding: EdgeInsets.fromLTRB(0, 92, 22, 0),
+          padding: EdgeInsets.fromLTRB(0, 108, 22, 0),
           decoration: BoxDecoration(
             border: Border(left: BorderSide(color: AppColors.borderColor)),
           ),
@@ -436,41 +675,48 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   }
 
   Widget _buildReferenceToolbar() {
-    return Row(
-      children: [
-        SizedBox(
-          width: 360,
-          child: _buildReferenceSearchField(),
-        ),
-        Spacer(),
-        _ReferenceToolbarAction(
-          icon: Icons.file_download_outlined,
-          label: '导入音乐',
-          onTap: () {},
-        ),
-        SizedBox(width: 18),
-        _ReferenceToolbarAction(
-          icon: Icons.refresh,
-          label: '刷新',
-          onTap: () => _loadTracks(_searchController.text),
-        ),
-        SizedBox(width: 16),
-        IconButton(
-          tooltip: '切换主题',
-          onPressed: () => Get.find<ThemeStore>().toggleTheme(),
-          icon: Icon(
-            AppColors.isDark ? Icons.light_mode_outlined : Icons.dark_mode,
-            color: AppColors.secondaryText,
-            size: 20,
-          ),
-        ),
-        SizedBox(width: 8),
-        Icon(Icons.remove, color: AppColors.secondaryText, size: 20),
-        SizedBox(width: 18),
-        Icon(Icons.crop_square, color: AppColors.secondaryText, size: 16),
-        SizedBox(width: 18),
-        Icon(Icons.close, color: AppColors.secondaryText, size: 20),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 660;
+        return Row(
+          children: [
+            Flexible(
+              flex: 10,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 360,
+                  minWidth: compact ? 180 : 260,
+                ),
+                child: _buildReferenceSearchField(),
+              ),
+            ),
+            Spacer(),
+            _ReferenceToolbarAction(
+              icon: Icons.file_download_outlined,
+              label: compact ? null : '导入音乐',
+              onTap: _showSqmusicDownloadDialog,
+            ),
+            SizedBox(width: compact ? 8 : 18),
+            _ReferenceToolbarAction(
+              icon: _scanRunning ? Icons.hourglass_top : Icons.refresh,
+              label: compact ? null : (_scanRunning ? '扫描中' : '刷新'),
+              onTap: _scanRunning
+                  ? null
+                  : () => _runLibraryScan(incremental: true),
+            ),
+            SizedBox(width: compact ? 6 : 16),
+            IconButton(
+              tooltip: '切换主题',
+              onPressed: () => Get.find<ThemeStore>().toggleTheme(),
+              icon: Icon(
+                AppColors.isDark ? Icons.light_mode_outlined : Icons.dark_mode,
+                color: AppColors.secondaryText,
+                size: 20,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -910,14 +1156,26 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   }
 
   Widget _buildReferenceRightRail() {
-    return Column(
-      children: [
-        _buildReferenceTodayRadioCard(),
-        SizedBox(height: 12),
-        Expanded(child: _buildReferenceRecentCard()),
-        SizedBox(height: 12),
-        _buildReferenceFavoriteCard(),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Column(
+              children: [
+                _buildReferenceTodayRadioCard(),
+                SizedBox(height: 12),
+                SizedBox(
+                  height: constraints.maxHeight < 590 ? 210 : 260,
+                  child: _buildReferenceRecentCard(),
+                ),
+                SizedBox(height: 12),
+                _buildReferenceFavoriteCard(),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1163,9 +1421,9 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     return Obx(() {
       final track = _globalPlayerStore.currentTrack;
       return Container(
-        height: 120,
+        height: 108,
         margin: EdgeInsets.fromLTRB(14, 0, 14, 12),
-        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: BoxDecoration(
           color: AppColors.navigationBg
               .withValues(alpha: AppColors.isDark ? 0.72 : 0.9),
@@ -1193,8 +1451,8 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
                     borderRadius: BorderRadius.circular(8),
                     child: NetImage(
                       _albumField(track, 'picUrl'),
-                      width: 78,
-                      height: 78,
+                      width: 70,
+                      height: 70,
                       fit: BoxFit.cover,
                     ),
                   ),
@@ -1473,306 +1731,6 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     }
   }
 
-  Widget _buildTopBar() {
-    return Container(
-      height: 64,
-      color: AppColors.navigationBg,
-      padding: EdgeInsets.symmetric(horizontal: 18),
-      child: Row(
-        children: [
-          Text(
-            '沐音',
-            style: TextStyle(
-              color: AppColors.primaryText,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          Spacer(),
-          ThemeToggleButton(),
-          SizedBox(width: 8),
-          IconButton(
-            tooltip: '刷新曲库',
-            onPressed: () => _loadTracks(_searchController.text),
-            icon: Icon(
-              Icons.refresh,
-              color: AppColors.secondaryText,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSearchField() {
-    return Container(
-      height: 38,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.borderColor),
-      ),
-      child: TextField(
-        controller: _searchController,
-        onSubmitted: _loadTracks,
-        style: TextStyle(color: AppColors.primaryText, fontSize: 14),
-        decoration: InputDecoration(
-          border: InputBorder.none,
-          hintText: '搜索歌曲、专辑',
-          hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
-          prefixIcon:
-              Icon(Icons.search, color: AppColors.secondaryText, size: 20),
-          suffixIcon: IconButton(
-            onPressed: () => _loadTracks(_searchController.text),
-            icon: Icon(Icons.arrow_forward,
-                color: AppColors.secondaryText, size: 18),
-          ),
-          contentPadding: EdgeInsets.only(top: 9),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTrackPanel() {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.navigationBg.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderColor),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Row(
-        children: [
-          _buildLibrarySidebar(),
-          Expanded(
-            child: Column(
-              children: [
-                _buildLibraryHeader(),
-                Expanded(child: _buildLibraryContent()),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLibrarySidebar() {
-    return Container(
-      width: 178,
-      decoration: BoxDecoration(
-        color: AppColors.appBg,
-        border: Border(
-          right: BorderSide(color: AppColors.borderColor),
-        ),
-      ),
-      padding: EdgeInsets.fromLTRB(12, 14, 12, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: Text(
-              '音乐库',
-              style: TextStyle(
-                color: AppColors.primaryText,
-                fontSize: 17,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          SizedBox(height: 14),
-          _LibraryNavItem(
-            active: _viewMode == _DesktopMusicViewMode.tracks,
-            icon: Icons.queue_music,
-            label: '音乐列表',
-            count: _tracks.length,
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.tracks;
-              _selectedArtistName = null;
-            }),
-          ),
-          _LibraryNavItem(
-            active: _viewMode == _DesktopMusicViewMode.artists,
-            icon: Icons.person_outline,
-            label: '歌手列表',
-            count: _artistGroups().length,
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.artists;
-            }),
-          ),
-          _LibraryNavItem(
-            active: _viewMode == _DesktopMusicViewMode.favorites,
-            icon: Icons.favorite_border,
-            label: '喜欢',
-            count: _favoriteTrackIds.length,
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.favorites;
-              _selectedArtistName = null;
-            }),
-          ),
-          _LibraryNavItem(
-            active: _viewMode == _DesktopMusicViewMode.history,
-            icon: Icons.history,
-            label: '播放记录',
-            count: _playHistoryIds.length,
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.history;
-              _selectedArtistName = null;
-            }),
-          ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(8, 14, 8, 8),
-            child: Text(
-              '智能内容',
-              style: TextStyle(
-                color: AppColors.secondaryText,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          _LibraryNavItem(
-            active: _viewMode == _DesktopMusicViewMode.radio,
-            icon: Icons.radio,
-            label: '今日电台',
-            count: _radioEpisodes.length,
-            onTap: () => setState(() {
-              _viewMode = _DesktopMusicViewMode.radio;
-              _selectedArtistName = null;
-            }),
-          ),
-          Spacer(),
-          _buildNowPlayingMini(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLibraryHeader() {
-    return Container(
-      constraints: BoxConstraints(minHeight: 122),
-      padding: EdgeInsets.fromLTRB(18, 16, 18, 14),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.borderColor),
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _contentTitle(),
-                      style: TextStyle(
-                        color: AppColors.primaryText,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    SizedBox(height: 5),
-                    Text(
-                      _contentSubtitle(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppColors.secondaryText,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (_viewMode == _DesktopMusicViewMode.radio) ...[
-                _RadioStatusBadge(status: _radioStatus),
-                SizedBox(width: 10),
-                IconButton(
-                  tooltip: '刷新电台',
-                  onPressed: () {
-                    _loadRadioStatus();
-                    _loadDailyRadioStatus();
-                    _loadRadioEpisodes();
-                  },
-                  icon: Icon(
-                    Icons.refresh,
-                    color: AppColors.secondaryText,
-                    size: 20,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          SizedBox(height: 14),
-          Row(
-            children: [
-              _LibraryMetric(label: '歌曲', value: '${_tracks.length}'),
-              SizedBox(width: 10),
-              _LibraryMetric(label: '歌手', value: '${_artistGroups().length}'),
-              SizedBox(width: 10),
-              _LibraryMetric(label: '喜欢', value: '${_favoriteTrackIds.length}'),
-              SizedBox(width: 10),
-              _LibraryMetric(label: '记录', value: '${_playHistoryIds.length}'),
-              Spacer(),
-              if (_viewMode == _DesktopMusicViewMode.radio) ...[
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primaryBtn,
-                    side: BorderSide(color: AppColors.primaryBtn),
-                  ),
-                  onPressed: _dailyRadioGenerating ? null : _runDailyRadioNow,
-                  icon: _dailyRadioGenerating
-                      ? SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: _buildTinyLoading(AppColors.primaryBtn),
-                        )
-                      : Icon(Icons.wb_sunny_outlined, size: 17),
-                  label: Text(_dailyRadioGenerating ? '生成中' : '今日电台'),
-                ),
-                SizedBox(width: 8),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryBtn,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                  ),
-                  onPressed: _radioGenerating ? null : _generateRadioEpisode,
-                  icon: _radioGenerating
-                      ? SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: _buildTinyLoading(Colors.white),
-                        )
-                      : Icon(Icons.auto_awesome, size: 17),
-                  label: Text(_radioGenerating ? '生成中' : '生成电台'),
-                ),
-              ],
-              if (_viewMode != _DesktopMusicViewMode.radio)
-                SizedBox(width: 310, child: _buildSearchField()),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLibraryContent() {
-    if (_viewMode == _DesktopMusicViewMode.radio) {
-      return _buildRadioPanel();
-    }
-    if (_loading) {
-      return _buildLoadingState('音乐加载中...');
-    }
-    if (_error != null) return _buildError();
-    if (_viewMode == _DesktopMusicViewMode.artists) {
-      return _buildArtistsPanel();
-    }
-    return _buildTrackList(_visibleTracks());
-  }
-
   Widget _buildLoadingState(String text) {
     return Center(
       child: Column(
@@ -1802,318 +1760,6 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     );
   }
 
-  Widget _buildTrackList(List<Map<String, dynamic>> tracks) {
-    if (tracks.isEmpty) {
-      return Center(
-        child: Text(
-          _emptyText(),
-          style: TextStyle(color: AppColors.secondaryText),
-        ),
-      );
-    }
-    return ListView.builder(
-      padding: EdgeInsets.fromLTRB(14, 12, 14, 14),
-      itemCount: tracks.length,
-      itemBuilder: (context, index) {
-        final track = tracks[index];
-        return Obx(() {
-          final active = _globalPlayerStore.currentTrack?['id'] == track['id'];
-          final favorite = _favoriteTrackIds.contains(track['id']?.toString());
-          return _DesktopTrackItem(
-            active: active,
-            favorite: favorite,
-            index: index,
-            onFavoriteTap: () => _toggleFavorite(track),
-            onTap: () => _playTrack(track, index),
-            track: track,
-          );
-        });
-      },
-    );
-  }
-
-  Widget _buildArtistsPanel() {
-    final groups = _artistGroups();
-    if (groups.isEmpty) {
-      return Center(
-        child: Text('暂无歌手', style: TextStyle(color: AppColors.secondaryText)),
-      );
-    }
-    if (_selectedArtistName != null) {
-      final artistTracks = _artistTracks(_selectedArtistName!);
-      return Column(
-        children: [
-          Container(
-            height: 58,
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: AppColors.borderColor)),
-            ),
-            child: Row(
-              children: [
-                IconButton(
-                  tooltip: '返回歌手列表',
-                  onPressed: () => setState(() => _selectedArtistName = null),
-                  icon: Icon(Icons.arrow_back,
-                      color: AppColors.secondaryText, size: 20),
-                ),
-                SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    _selectedArtistName!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.primaryText,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                Text(
-                  '${artistTracks.length} 首歌曲',
-                  style: TextStyle(
-                    color: AppColors.secondaryText,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(child: _buildTrackList(artistTracks)),
-        ],
-      );
-    }
-    final entries = groups.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
-    return GridView.builder(
-      padding: EdgeInsets.fromLTRB(14, 14, 14, 14),
-      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 260,
-        mainAxisExtent: 104,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-      ),
-      itemCount: entries.length,
-      itemBuilder: (context, index) {
-        final entry = entries[index];
-        final firstTrack = entry.value.first;
-        return _ArtistCard(
-          artist: entry.key,
-          coverUrl: _albumField(firstTrack, 'picUrl'),
-          count: entry.value.length,
-          onTap: () => setState(() => _selectedArtistName = entry.key),
-        );
-      },
-    );
-  }
-
-  Widget _buildNowPlayingMini() {
-    return Obx(() {
-      final track = _globalPlayerStore.currentTrack;
-      if (track == null) {
-        return Container(
-          padding: EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppColors.navigationBg.withValues(alpha: 0.62),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.borderColor),
-          ),
-          child: Text(
-            '还没有播放歌曲',
-            style: TextStyle(color: AppColors.secondaryText, fontSize: 12),
-          ),
-        );
-      }
-      return Container(
-        padding: EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: AppColors.navigationBg.withValues(alpha: 0.72),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.borderColor),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '正在播放',
-              style: TextStyle(
-                color: AppColors.secondaryText,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            SizedBox(height: 8),
-            Row(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: NetImage(
-                    _albumField(track, 'picUrl'),
-                    width: 42,
-                    height: 42,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                SizedBox(width: 9),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        track['name'] ?? '未知歌曲',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppColors.primaryText,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      SizedBox(height: 3),
-                      Text(
-                        _artistName(track),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppColors.secondaryText,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    });
-  }
-
-  Widget _buildRadioPanel() {
-    return Column(
-      children: [
-        Container(
-          margin: EdgeInsets.fromLTRB(14, 12, 14, 10),
-          padding: EdgeInsets.fromLTRB(14, 13, 14, 13),
-          decoration: BoxDecoration(
-            color: AppColors.bgBtn.withValues(alpha: 0.7),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.borderColor),
-          ),
-          child: Row(
-            children: [
-              _PlainIcon(
-                icon: Icons.radio,
-                active: true,
-                size: 44,
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '节目流程',
-                      style: TextStyle(
-                        color: AppColors.primaryText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      '${_dailyRadioSummary()} 生成后会按“开场语音、推荐歌曲、收尾语音”顺序加入播放队列。',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppColors.secondaryText,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(width: 12),
-              _PlainIcon(
-                icon: Icons.playlist_play,
-                active: true,
-                size: 38,
-              ),
-            ],
-          ),
-        ),
-        if (_radioError != null)
-          Padding(
-            padding: EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: Text(
-              _radioError!,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: Colors.redAccent, fontSize: 12),
-            ),
-          ),
-        if (_latestRadioUsesLegacyShape())
-          Container(
-            width: double.infinity,
-            margin: EdgeInsets.fromLTRB(14, 0, 14, 10),
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppColors.bgBtn.withValues(alpha: 0.52),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: AppColors.primaryBtn.withValues(alpha: 0.28),
-              ),
-            ),
-            child: Row(
-              children: [
-                _PlainIcon(
-                  icon: Icons.sync_problem,
-                  active: true,
-                  size: 32,
-                ),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'NAS 当前还在返回旧电台结构，客户端已按“串词 + 歌曲队列”兼容播放；重新部署 NAS 服务端后才会有完整开场、歌曲、收尾语音。',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.secondaryText,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        Expanded(
-          child: _radioLoading
-              ? _buildLoadingState('电台加载中...')
-              : _radioEpisodes.isEmpty
-                  ? Center(
-                      child: Text(
-                        '还没有生成过电台',
-                        style: TextStyle(color: AppColors.secondaryText),
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: EdgeInsets.fromLTRB(14, 0, 14, 14),
-                      itemCount: _radioEpisodes.length,
-                      itemBuilder: (context, index) {
-                        final episode = _radioEpisodes[index];
-                        return _RadioEpisodeItem(
-                          episode: episode,
-                          onTap: () => _playRadioEpisode(episode),
-                        );
-                      },
-                    ),
-        ),
-      ],
-    );
-  }
-
   String _dailyRadioSummary() {
     final status = _dailyRadioStatus;
     if (status == null) {
@@ -2129,48 +1775,6 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     final voice = _radioStatus?['voiceId']?.toString() ?? '';
     final engine = minimaxReady ? 'MiniMax $voice' : '测试音频';
     return '每天 $time 根据$city天气和最近听歌自动生成，$engine$nextText。';
-  }
-
-  bool _latestRadioUsesLegacyShape() {
-    if (_radioEpisodes.isEmpty) return false;
-    final latest = _radioEpisodes.first;
-    final segments = latest['segments'];
-    final sourceTrackIds = latest['sourceTrackIds'];
-    final hasSegments = segments is List && segments.isNotEmpty;
-    final hasSourceTracks = sourceTrackIds is List && sourceTrackIds.isNotEmpty;
-    return !hasSegments && hasSourceTracks;
-  }
-
-  String _contentTitle() {
-    switch (_viewMode) {
-      case _DesktopMusicViewMode.tracks:
-        return '音乐列表';
-      case _DesktopMusicViewMode.artists:
-        return _selectedArtistName == null ? '歌手列表' : _selectedArtistName!;
-      case _DesktopMusicViewMode.favorites:
-        return '喜欢的音乐';
-      case _DesktopMusicViewMode.history:
-        return '播放记录';
-      case _DesktopMusicViewMode.radio:
-        return '今日电台';
-    }
-  }
-
-  String _contentSubtitle() {
-    switch (_viewMode) {
-      case _DesktopMusicViewMode.tracks:
-        return '从 NAS 曲库读取，支持搜索、播放和设为喜欢。';
-      case _DesktopMusicViewMode.artists:
-        return _selectedArtistName == null
-            ? '按歌手整理你的曲库，点击歌手后进入歌曲列表。'
-            : '当前歌手的全部歌曲，点击即可播放。';
-      case _DesktopMusicViewMode.favorites:
-        return '这里是你手动收藏的歌曲。';
-      case _DesktopMusicViewMode.history:
-        return '按最近播放顺序排列，最多保留 80 首。';
-      case _DesktopMusicViewMode.radio:
-        return '生成开场语音、推荐歌曲队列和收尾语音，然后按节目顺序播放。';
-    }
   }
 
   String _emptyText() {
@@ -2281,892 +1885,5 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   List<Map<String, dynamic>> _artistTracks(String artist) {
     return _tracks.where((track) => _artistName(track) == artist).toList();
-  }
-}
-
-enum _DesktopMusicViewMode { tracks, artists, favorites, history, radio }
-
-class _StarFieldBackground extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _StarFieldPainter(isDark: AppColors.isDark),
-      child: SizedBox.expand(),
-    );
-  }
-}
-
-class _StarFieldPainter extends CustomPainter {
-  _StarFieldPainter({required this.isDark});
-
-  final bool isDark;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final background = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: isDark
-            ? [
-                Color(0xFF05070A),
-                Color(0xFF0A1016),
-                Color(0xFF06080B),
-              ]
-            : [
-                Color(0xFFF8FAFC),
-                Color(0xFFF2F5F9),
-                Color(0xFFFFFFFF),
-              ],
-      ).createShader(rect);
-    canvas.drawRect(rect, background);
-
-    final starPaint = Paint();
-    final count = isDark ? 180 : 90;
-    for (var i = 0; i < count; i++) {
-      final x = ((i * 97) % math.max(size.width, 1)).toDouble();
-      final y = ((i * 53) % math.max(size.height, 1)).toDouble();
-      final pulse = ((i * 37) % 100) / 100;
-      final radius = 0.45 + pulse * 0.85;
-      final alpha = isDark ? 0.16 + pulse * 0.34 : 0.08 + pulse * 0.12;
-      starPaint.color = (isDark ? Colors.white : AppColors.primaryBtn)
-          .withValues(alpha: alpha);
-      canvas.drawCircle(Offset(x, y), radius, starPaint);
-    }
-
-    if (isDark) {
-      final glowPaint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            AppColors.primaryBtn.withValues(alpha: 0.16),
-            Colors.transparent,
-          ],
-        ).createShader(
-          Rect.fromCircle(
-            center: Offset(size.width * 0.55, size.height * 0.45),
-            radius: size.width * 0.38,
-          ),
-        );
-      canvas.drawRect(rect, glowPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _StarFieldPainter oldDelegate) {
-    return oldDelegate.isDark != isDark;
-  }
-}
-
-class _ReferenceNavItem extends StatelessWidget {
-  _ReferenceNavItem({
-    required this.active,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final bool active;
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              color: active ? AppColors.primaryBtn : AppColors.primaryText,
-              size: 24,
-            ),
-            SizedBox(width: 18),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: active ? AppColors.primaryBtn : AppColors.primaryText,
-                  fontSize: 15,
-                  fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReferenceToolbarAction extends StatelessWidget {
-  _ReferenceToolbarAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-        child: Row(
-          children: [
-            Icon(icon, color: AppColors.primaryText, size: 20),
-            SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: AppColors.primaryText,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReferenceTab extends StatelessWidget {
-  _ReferenceTab({
-    required this.label,
-    required this.active,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        width: 86,
-        height: 44,
-        alignment: Alignment.centerLeft,
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(
-              color: active ? AppColors.primaryBtn : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: active ? AppColors.primaryBtn : AppColors.primaryText,
-            fontSize: 17,
-            fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReferencePrimaryButton extends StatelessWidget {
-  _ReferencePrimaryButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ElevatedButton.icon(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.primaryBtn,
-        disabledBackgroundColor: AppColors.primaryBtn.withValues(alpha: 0.38),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        minimumSize: Size(0, 40),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        padding: EdgeInsets.symmetric(horizontal: 17),
-      ),
-      onPressed: onTap,
-      icon: Icon(icon, size: 18),
-      label: Text(
-        label,
-        style: TextStyle(fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
-
-class _ReferenceGhostButton extends StatelessWidget {
-  _ReferenceGhostButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      style: OutlinedButton.styleFrom(
-        foregroundColor:
-            onTap == null ? AppColors.secondaryText : AppColors.primaryText,
-        disabledForegroundColor: AppColors.secondaryText,
-        side: BorderSide(color: AppColors.borderColor),
-        minimumSize: Size(0, 40),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        padding: EdgeInsets.symmetric(horizontal: 14),
-      ),
-      onPressed: onTap,
-      icon: Icon(icon, size: 18),
-      label: Text(
-        label,
-        style: TextStyle(fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
-
-class _ReferenceIconButton extends StatelessWidget {
-  _ReferenceIconButton({
-    required this.icon,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Container(
-        width: 40,
-        height: 40,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.borderColor),
-        ),
-        child: Icon(icon, color: AppColors.primaryText, size: 22),
-      ),
-    );
-  }
-}
-
-class _ReferencePanel extends StatelessWidget {
-  _ReferencePanel({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.navigationBg
-            .withValues(alpha: AppColors.isDark ? 0.54 : 0.86),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.borderColor),
-        boxShadow: [
-          BoxShadow(
-            color:
-                Colors.black.withValues(alpha: AppColors.isDark ? 0.22 : 0.05),
-            blurRadius: 18,
-            offset: Offset(0, 10),
-          ),
-        ],
-      ),
-      child: child,
-    );
-  }
-}
-
-class _RightRailTrack extends StatelessWidget {
-  _RightRailTrack({
-    required this.track,
-    required this.artistName,
-    required this.coverUrl,
-    required this.duration,
-    required this.onTap,
-  });
-
-  final Map<String, dynamic> track;
-  final String artistName;
-  final String coverUrl;
-  final String duration;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: 13),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: NetImage(
-                coverUrl,
-                width: 44,
-                height: 44,
-                fit: BoxFit.cover,
-              ),
-            ),
-            SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    track['name']?.toString() ?? '未知歌曲',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.primaryText,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    artistName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.secondaryText,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(width: 8),
-            Text(
-              duration,
-              style: TextStyle(
-                color: AppColors.secondaryText,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PlainIcon extends StatelessWidget {
-  _PlainIcon({
-    required this.icon,
-    this.active = false,
-    this.size = 20,
-  });
-
-  final IconData icon;
-  final bool active;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = active ? AppColors.primaryBtn : AppColors.secondaryText;
-    return Icon(
-      icon,
-      size: size,
-      color: color,
-    );
-  }
-}
-
-class _LibraryNavItem extends StatelessWidget {
-  _LibraryNavItem({
-    required this.active,
-    required this.icon,
-    required this.label,
-    required this.count,
-    required this.onTap,
-  });
-
-  final bool active;
-  final IconData icon;
-  final String label;
-  final int count;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 6),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: onTap,
-        child: Container(
-          height: 42,
-          padding: EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            children: [
-              _PlainIcon(
-                icon: icon,
-                active: active,
-              ),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color:
-                        active ? AppColors.primaryBtn : AppColors.primaryText,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              Text(
-                '$count',
-                style: TextStyle(
-                  color:
-                      active ? AppColors.primaryBtn : AppColors.secondaryText,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LibraryMetric extends StatelessWidget {
-  _LibraryMetric({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 32,
-      padding: EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: AppColors.bgBtn.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.borderColor),
-      ),
-      child: Row(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              color: AppColors.primaryText,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: AppColors.secondaryText,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ArtistCard extends StatelessWidget {
-  _ArtistCard({
-    required this.artist,
-    required this.coverUrl,
-    required this.count,
-    required this.onTap,
-  });
-
-  final String artist;
-  final String coverUrl;
-  final int count;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: Container(
-        padding: EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppColors.navigationBg.withValues(alpha: 0.52),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.borderColor),
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: NetImage(
-                coverUrl,
-                width: 58,
-                height: 58,
-                fit: BoxFit.cover,
-              ),
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    artist,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: AppColors.primaryText,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  SizedBox(height: 5),
-                  Text(
-                    '$count 首歌曲',
-                    style: TextStyle(
-                      color: AppColors.secondaryText,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.chevron_right,
-              color: AppColors.secondaryText,
-              size: 20,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DesktopTrackItem extends StatelessWidget {
-  _DesktopTrackItem({
-    required this.active,
-    required this.favorite,
-    required this.index,
-    required this.onFavoriteTap,
-    required this.onTap,
-    required this.track,
-  });
-
-  final bool active;
-  final bool favorite;
-  final int index;
-  final VoidCallback onFavoriteTap;
-  final VoidCallback onTap;
-  final Map<String, dynamic> track;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        highlightColor: AppColors.primaryBtn.withValues(alpha: 0.18),
-        splashColor: AppColors.primaryBtn.withValues(alpha: 0.26),
-        onTap: onTap,
-        child: Container(
-          height: 74,
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: active
-                ? AppColors.bgBtn
-                : AppColors.navigationBg.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: active ? AppColors.primaryBtn : AppColors.borderColor,
-            ),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 28,
-                child: Text(
-                  '${index + 1}',
-                  style: TextStyle(
-                    color:
-                        active ? AppColors.primaryBtn : AppColors.secondaryText,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: NetImage(
-                  _albumField(track, 'picUrl'),
-                  width: 48,
-                  height: 48,
-                  fit: BoxFit.cover,
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      track['name'] ?? '未知歌曲',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppColors.primaryText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      _artistName(track),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppColors.secondaryText,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: favorite ? '取消喜欢' : '设为喜欢',
-                onPressed: onFavoriteTap,
-                icon: Icon(
-                  favorite ? Icons.favorite : Icons.favorite_border,
-                  color:
-                      favorite ? AppColors.primaryBtn : AppColors.secondaryText,
-                  size: 18,
-                ),
-              ),
-              Icon(
-                active ? Icons.volume_up : Icons.play_arrow,
-                color: active ? AppColors.primaryBtn : AppColors.secondaryText,
-                size: 20,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _artistName(Map<String, dynamic> track) {
-    final artists = track['ar'];
-    if (artists is List && artists.isNotEmpty && artists.first is Map) {
-      return artists.first['name']?.toString() ?? '未知歌手';
-    }
-    return '未知歌手';
-  }
-
-  String _albumField(Map<String, dynamic> track, String key) {
-    final album = track['al'];
-    if (album is Map) return album[key]?.toString() ?? '';
-    final rawAlbum = track['album'];
-    if (rawAlbum is Map && key == 'picUrl') {
-      return NasMusicApi.resolveAssetUrl(
-        rawAlbum['coverArtUrl']?.toString() ?? rawAlbum['picUrl']?.toString(),
-      );
-    }
-    if (key == 'picUrl') {
-      return NasMusicApi.resolveAssetUrl(track['coverArtUrl']?.toString());
-    }
-    return '';
-  }
-}
-
-class _RadioEpisodeItem extends StatelessWidget {
-  _RadioEpisodeItem({
-    required this.episode,
-    required this.onTap,
-  });
-
-  final Map<String, dynamic> episode;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final title = episode['title']?.toString() ?? '未命名电台';
-    final summary = episode['summary']?.toString() ?? '';
-    final generator = episode['generator']?.toString() ?? 'mock';
-    final duration = _formatDuration(episode['durationSeconds']);
-    final segments = episode['segments'];
-    final trackCount = segments is List
-        ? segments.where((item) {
-            return item is Map && item['type']?.toString() == 'track';
-          }).length
-        : 0;
-    final sourceTrackIds = episode['sourceTrackIds'];
-    final fallbackTrackCount =
-        sourceTrackIds is List ? sourceTrackIds.length : 0;
-    final displayTrackCount = trackCount > 0 ? trackCount : fallbackTrackCount;
-    final segmentText = displayTrackCount > 0 ? ' · $displayTrackCount 首歌' : '';
-    final generatorText = generator == 'minimax'
-        ? (trackCount > 0 ? 'MiniMax 开场/收尾' : 'MiniMax 串词')
-        : '测试音频';
-    return Padding(
-      padding: EdgeInsets.only(bottom: 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Container(
-          constraints: BoxConstraints(minHeight: 84),
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.navigationBg.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppColors.borderColor),
-          ),
-          child: Row(
-            children: [
-              _PlainIcon(
-                icon: Icons.radio,
-                active: true,
-                size: 48,
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppColors.primaryText,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    SizedBox(height: 5),
-                    Text(
-                      summary.isEmpty ? 'NAS 生成的私人音乐电台' : summary,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppColors.secondaryText,
-                        fontSize: 12,
-                        height: 1.3,
-                      ),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      '$generatorText$segmentText · $duration',
-                      style: TextStyle(
-                        color: AppColors.secondaryText,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(width: 12),
-              Icon(
-                Icons.play_arrow,
-                color: AppColors.primaryBtn,
-                size: 22,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatDuration(dynamic seconds) {
-    final value =
-        seconds is int ? seconds : int.tryParse(seconds?.toString() ?? '') ?? 0;
-    if (value <= 0) return '--:--';
-    final minutes = (value ~/ 60).toString().padLeft(2, '0');
-    final rest = (value % 60).toString().padLeft(2, '0');
-    return '$minutes:$rest';
-  }
-}
-
-class _RadioStatusBadge extends StatelessWidget {
-  _RadioStatusBadge({required this.status});
-
-  final Map<String, dynamic>? status;
-
-  @override
-  Widget build(BuildContext context) {
-    final ready = status?['minimaxConfigured'] == true;
-    final label = ready ? 'MiniMax 已就绪' : '测试音频';
-    final color = ready ? AppColors.primaryBtn : AppColors.secondaryText;
-    return Container(
-      height: 32,
-      padding: EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            ready ? Icons.check_circle : Icons.info_outline,
-            color: color,
-            size: 15,
-          ),
-          SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

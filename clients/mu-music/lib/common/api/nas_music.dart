@@ -3,7 +3,7 @@ import 'package:mu_music/common/index.dart';
 
 class NasMusicApi {
   static String get streamBaseUrl =>
-      '${Constants.apiUrl}${Constants.musicApiPath}';
+      '${_activeApiUrl()}${Constants.musicApiPath}';
 
   static Future<Map<String, dynamic>> getStatus() async {
     final response = await HttpUtil().get('/status');
@@ -104,6 +104,16 @@ class NasMusicApi {
     return Map<String, dynamic>.from(response.data as Map);
   }
 
+  static Future<Map<String, dynamic>> buildDailyRadioMix({
+    int trackCount = 3,
+  }) async {
+    final response = await HttpUtil().post(
+      '/radio/daily/build',
+      data: {'trackCount': trackCount},
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   static Future<List<Map<String, dynamic>>> listRadioEpisodes() async {
     final response = await HttpUtil().get('/radio/episodes');
     final items = _extractList(response.data);
@@ -127,12 +137,87 @@ class NasMusicApi {
     return Map<String, dynamic>.from(response.data as Map);
   }
 
+  static Future<Map<String, dynamic>> scanLibrary(
+      {bool incremental = true}) async {
+    final path = incremental
+        ? '${Constants.musicApiPath}/admin/scan/incremental'
+        : '${Constants.musicApiPath}/admin/scan/full';
+    final response = await HttpUtil().post(path);
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> scanLibraryBackground({
+    bool incremental = true,
+  }) async {
+    final path = incremental
+        ? '${Constants.musicApiPath}/admin/scan/background/incremental'
+        : '${Constants.musicApiPath}/admin/scan/background';
+    final response = await HttpUtil().post(path);
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> getScanStatus() async {
+    final response =
+        await HttpUtil().get('${Constants.musicApiPath}/admin/scan/status');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> getSqmusicStatus() async {
+    final response = await HttpUtil()
+        .get('${Constants.musicApiPath}/download/sqmusic/status');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<List<Map<String, dynamic>>> searchSqmusic({
+    required String keyword,
+    String plugName = '',
+    int pageSize = 20,
+  }) async {
+    final response = await HttpUtil().get(
+      '${Constants.musicApiPath}/download/sqmusic/search',
+      params: {
+        'keyword': keyword,
+        'plugName': plugName,
+        'pageSize': pageSize,
+      },
+    );
+    final items = _extractList(response.data);
+    return items
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+  }
+
+  static Future<Map<String, dynamic>> downloadSqmusicTrack(
+    Map<String, dynamic> track,
+  ) async {
+    final response = await HttpUtil().post(
+      '${Constants.musicApiPath}/download/sqmusic/song',
+      data: {
+        'track': track,
+        'autoSelectBrType': true,
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> rescanSqmusicDownloads() async {
+    final response = await HttpUtil().post(
+      '${Constants.musicApiPath}/download/sqmusic/rescan',
+      data: {
+        'incremental': true,
+        'scrapeMissingWithQqMusic': true,
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   static String radioEpisodeStreamUrl(String episodeId) {
-    return '${Constants.apiUrl}/radio/episodes/$episodeId/stream';
+    return '${_activeApiUrl()}/radio/episodes/$episodeId/stream';
   }
 
   static String radioEpisodeOutroStreamUrl(String episodeId) {
-    return '${Constants.apiUrl}/radio/episodes/$episodeId/outro/stream';
+    return '${_activeApiUrl()}/radio/episodes/$episodeId/outro/stream';
   }
 
   static Map<String, dynamic> normalizeRadioEpisode(Map<String, dynamic> raw) {
@@ -166,6 +251,11 @@ class NasMusicApi {
     final rawSegments = raw['segments'];
     if (rawSegments is! List || rawSegments.isEmpty) {
       return _normalizeLegacyRadioEpisodePlaylist(raw);
+    }
+    final hasFullMix = rawSegments.any((item) =>
+        item is Map && item['type']?.toString().toLowerCase() == 'full_mix');
+    if (hasFullMix) {
+      return [normalizeRadioEpisode(raw)];
     }
 
     final episodeId = raw['id']?.toString() ?? '';
@@ -264,7 +354,7 @@ class NasMusicApi {
   }
 
   static String streamUrl(String trackId) {
-    return '$streamBaseUrl/tracks/$trackId/stream';
+    return '${_activeApiUrl()}/audio/$trackId';
   }
 
   static String resolveAssetUrl(String? path) {
@@ -277,18 +367,18 @@ class NasMusicApi {
       return '${_rootServerUrl()}$value';
     }
     if (value.startsWith('/static/')) {
-      return '${Constants.apiUrl}$value';
+      return '${_activeApiUrl()}$value';
     }
     if (value.startsWith('/api/proxy-image')) {
-      return '${Constants.apiUrl}$value';
+      return '${_activeApiUrl()}$value';
     }
     if (value.startsWith('static/')) {
-      return '${Constants.apiUrl}/${value.substring(0)}';
+      return '${_activeApiUrl()}/${value.substring(0)}';
     }
     if (value.startsWith('covers/')) {
-      return '${Constants.apiUrl}${Constants.staticPath}/$value';
+      return '${_activeApiUrl()}${Constants.staticPath}/$value';
     }
-    return '${Constants.apiUrl}${Constants.staticPath}/$value';
+    return '${_activeApiUrl()}${Constants.staticPath}/$value';
   }
 
   static String resolveServerUrl(String? path) {
@@ -301,9 +391,9 @@ class NasMusicApi {
       return '${_rootServerUrl()}$value';
     }
     if (value.startsWith('/')) {
-      return '${Constants.apiUrl}$value';
+      return '${_activeApiUrl()}$value';
     }
-    return '${Constants.apiUrl}/$value';
+    return '${_activeApiUrl()}/$value';
   }
 
   static Map<String, dynamic> normalizeTrack(Map<String, dynamic> raw) {
@@ -429,7 +519,11 @@ class NasMusicApi {
   }
 
   static String _rootServerUrl() {
-    final uri = Uri.parse(Constants.apiUrl);
+    final uri = Uri.parse(_activeApiUrl());
     return '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
+  }
+
+  static String _activeApiUrl() {
+    return HttpUtil().activeBaseUrl;
   }
 }

@@ -1,8 +1,8 @@
 services:
-  agent-server:
+  music-server:
     build:
       context: ./services/agent-server
-    container_name: personal-os-agent-server
+    container_name: mu-music-server
     restart: unless-stopped
     ports:
       - "8088:8088"
@@ -11,8 +11,10 @@ services:
       AGENT_SERVER_BIND_HOST: 0.0.0.0
       AGENT_SERVER_PORT: "8088"
       DAOLIYU_BASE_URLS: http://host.docker.internal:5173,https://daoliyu.xuguopeng.com
-      DAOLIYU_MEDIA_ROOT: /data/media
+      DAOLIYU_MEDIA_ROOT: /data/media/daoliyu
+      MUSIC_LIBRARY_ROOTS: /data/media/daoliyu,/data/media/sqmusic,/data/media/local
       RADIO_OUTPUT_DIR: /data/radio
+      MINIMAX_CHAT_MODEL: MiniMax-M3
       MINIMAX_TTS_MODEL: speech-2.8-hd
       MINIMAX_TTS_VOICE_ID: male-qn-jingying
       RADIO_DAILY_ENABLED: "true"
@@ -26,6 +28,5 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /volume1/docker/personal-os-agent/data:/data
-      # For real PC audio playback, mount the NAS music library here.
-      # Replace /volume1/music with the actual folder that matches Daoliyu filePath entries.
-      # - /volume1/music:/data/media:ro
+      - /volume1/media/音乐:/data/media/daoliyu
+      - /volume1/docker/sqmusic/file:/data/media/sqmusic

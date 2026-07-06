@@ -5,6 +5,7 @@ import base64
 import json
 import math
 import sqlite3
+import subprocess
 import uuid
 import wave
 from datetime import date, datetime, time, timedelta
@@ -345,6 +346,12 @@ async def run_daily_radio_now() -> JSONResponse:
     return JSONResponse(content=result)
 
 
+@router.post("/radio/daily/build")
+async def build_daily_radio_mix(payload: dict[str, Any] | None = None) -> JSONResponse:
+    result = await create_daily_radio_mix_episode(payload or {})
+    return JSONResponse(content=result)
+
+
 @router.get("/radio/episodes")
 def list_radio_episodes() -> dict[str, Any]:
     with db() as conn:
@@ -636,6 +643,10 @@ async def fetch_daoliyu_track(track_id: str) -> Any:
 
 
 async def fetch_radio_seed_tracks(track_ids: list[str]) -> list[dict[str, Any]]:
+    local_tracks = fetch_local_radio_seed_tracks(track_ids)
+    if local_tracks:
+        return local_tracks[:8]
+
     tracks: list[dict[str, Any]] = []
     for track_id in track_ids:
         track = await fetch_daoliyu_track(track_id)
@@ -662,6 +673,34 @@ async def fetch_radio_seed_tracks(track_ids: list[str]) -> list[dict[str, Any]]:
                 if isinstance(items, list):
                     return [item for item in items if isinstance(item, dict)][:8]
     return []
+
+
+def fetch_local_radio_seed_tracks(track_ids: list[str]) -> list[dict[str, Any]]:
+    with db() as conn:
+        if track_ids:
+            tracks: list[dict[str, Any]] = []
+            for track_id in track_ids:
+                row = conn.execute(
+                    "SELECT * FROM music_tracks WHERE id = ?",
+                    (track_id,),
+                ).fetchone()
+                if row:
+                    tracks.append(local_track_row_to_radio_dict(row))
+            if tracks:
+                return tracks
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM music_tracks
+            ORDER BY
+                CASE WHEN last_played_at IS NULL THEN 1 ELSE 0 END,
+                last_played_at DESC,
+                play_count DESC,
+                updated_at DESC
+            LIMIT 8
+            """
+        ).fetchall()
+    return [local_track_row_to_radio_dict(row) for row in rows]
 
 
 def start_radio_scheduler() -> None:
@@ -819,6 +858,125 @@ async def create_daily_radio_episode(force: bool = False) -> dict[str, Any]:
         raise
 
 
+async def create_daily_radio_mix_episode(payload: dict[str, Any]) -> dict[str, Any]:
+    settings = get_settings()
+    now = datetime.now(ZoneInfo(settings.radio_daily_timezone))
+    today = now.date()
+    requested_count = int(payload.get("trackCount") or 3)
+    track_count = max(1, min(requested_count, 6))
+    title = str(payload.get("title") or f"西安私人音乐电台 {today.isoformat()}").strip()
+    force_mock_script = bool(payload.get("mockScript"))
+    force_mock_tts = bool(payload.get("mockTts") or payload.get("mockAudio"))
+
+    weather = await fetch_radio_weather()
+    recent_tracks = await fetch_recent_playback_tracks(settings.radio_recent_limit)
+    local_pool = fetch_local_recent_playback_tracks(max(settings.radio_recent_limit, 30))
+    context_tracks = recent_tracks or local_pool
+    if not context_tracks:
+        context_tracks = await fetch_radio_seed_tracks([])
+    context_tracks = context_tracks[:30]
+
+    script_plan = await generate_daily_radio_script_plan(
+        title=title,
+        today=today,
+        weather=weather,
+        recent_tracks=context_tracks,
+        track_count=track_count,
+        force_mock=force_mock_script,
+    )
+    recommendations = script_plan.get("tracks") or []
+    selected_tracks = await ensure_radio_mix_tracks_available(recommendations, track_count)
+    if not selected_tracks:
+        selected_tracks = [
+            track for track in context_tracks if str(track.get("sourcePath") or "").strip()
+        ][:track_count]
+    if not selected_tracks:
+        return {
+            "status": "error",
+            "message": "没有可用于合并的本地音乐文件。请先扫描曲库或下载歌曲。",
+        }
+
+    intro_script = str(script_plan.get("intro") or "").strip()
+    outro_script = str(script_plan.get("outro") or "").strip()
+    if not intro_script:
+        intro_script = build_radio_intro_script(title, selected_tracks, weather=weather, daily=True)
+    if not outro_script:
+        outro_script = build_radio_outro_script(title, selected_tracks, weather=weather)
+    script = json.dumps(
+        {
+            "title": title,
+            "intro": intro_script,
+            "tracks": [
+                {
+                    "title": first_string_value(track, "title", "name"),
+                    "artist": radio_artist_name(track),
+                    "album": radio_album_name(track),
+                }
+                for track in selected_tracks
+            ],
+            "outro": outro_script,
+            "weather": weather,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    job_id = uuid.uuid4().hex
+    selected_track_ids = [str(track.get("id") or "") for track in selected_tracks if track.get("id")]
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_radio_jobs (
+                id, title, status, mode, track_ids_json, script
+            ) VALUES (?, ?, 'running', 'mix', ?, ?)
+            """,
+            (job_id, title, json.dumps(selected_track_ids, ensure_ascii=False), script),
+        )
+
+    try:
+        episode = await generate_radio_mix_episode(
+            job_id=job_id,
+            title=title,
+            track_ids=selected_track_ids,
+            script=script,
+            intro_script=intro_script,
+            outro_script=outro_script,
+            tracks=selected_tracks,
+            force_mock_tts=force_mock_tts,
+        )
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE music_radio_jobs
+                SET status = 'completed',
+                    mode = ?,
+                    episode_id = ?,
+                    updated_at = current_timestamp
+                WHERE id = ?
+                """,
+                (episode["generator"], episode["id"], job_id),
+            )
+        return {
+            "id": job_id,
+            "status": "completed",
+            "episode": episode,
+            "weather": weather,
+            "scriptPlan": script_plan,
+            "message": "每日音乐电台合并音频已生成。",
+        }
+    except Exception as error:
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE music_radio_jobs
+                SET status = 'failed', error = ?, updated_at = current_timestamp
+                WHERE id = ?
+                """,
+                (str(error), job_id),
+            )
+        raise
+
+
 async def fetch_radio_weather() -> dict[str, Any]:
     settings = get_settings()
     url = "https://api.open-meteo.com/v1/forecast"
@@ -861,6 +1019,10 @@ async def fetch_radio_weather() -> dict[str, Any]:
 
 
 async def fetch_recent_playback_tracks(limit: int) -> list[dict[str, Any]]:
+    local_tracks = fetch_local_recent_playback_tracks(limit)
+    if local_tracks:
+        return local_tracks
+
     token = await get_or_login_daoliyu_token()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
@@ -876,6 +1038,56 @@ async def fetch_recent_playback_tracks(limit: int) -> list[dict[str, Any]]:
             if response.status_code < 400:
                 return extract_tracks_from_playback_payload(response.json())[:limit]
     return []
+
+
+def fetch_local_recent_playback_tracks(limit: int) -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.*
+            FROM music_play_history h
+            JOIN music_tracks t ON t.id = h.track_id
+            GROUP BY t.id
+            ORDER BY max(h.played_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        if not rows:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM music_tracks
+                ORDER BY play_count DESC, updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    return [local_track_row_to_radio_dict(row) for row in rows]
+
+
+def local_track_row_to_radio_dict(row: sqlite3.Row) -> dict[str, Any]:
+    title = row["title"] or Path(row["source_path"]).stem
+    artist = row["artist"] or "未知歌手"
+    album = row["album"] or "未知专辑"
+    cover_url = f"/v1/music/covers/{row['id']}" if row["cover_path"] else ""
+    return {
+        "id": row["id"],
+        "title": title,
+        "name": title,
+        "albumArtist": artist,
+        "durationSeconds": row["duration_seconds"],
+        "sourcePath": row["source_path"],
+        "coverArtUrl": cover_url,
+        "lyrics": row["lyrics"],
+        "album": {
+            "id": album,
+            "title": album,
+            "name": album,
+            "coverArtUrl": cover_url,
+        },
+        "artists": [{"id": artist, "name": artist}],
+    }
 
 
 def extract_tracks_from_playback_payload(payload: Any) -> list[dict[str, Any]]:
@@ -1110,6 +1322,368 @@ def radio_track_comment(index: int, name: str, artist: str) -> str:
     return comments[(index - 1) % len(comments)]
 
 
+async def generate_daily_radio_script_plan(
+    *,
+    title: str,
+    today: date,
+    weather: dict[str, Any],
+    recent_tracks: list[dict[str, Any]],
+    track_count: int,
+    force_mock: bool = False,
+) -> dict[str, Any]:
+    fallback = build_fallback_radio_script_plan(title, today, weather, recent_tracks, track_count)
+    if force_mock or not resolved_minimax_key() or not get_settings().minimax_group_id:
+        return fallback
+    prompt = build_minimax_radio_prompt(title, today, weather, recent_tracks, track_count)
+    try:
+        result = await generate_minimax_chat_json(prompt)
+    except Exception:
+        return fallback
+    title_value = str(result.get("title") or title).strip()
+    intro = str(result.get("intro") or "").strip()
+    outro = str(result.get("outro") or "").strip()
+    tracks = result.get("tracks") if isinstance(result.get("tracks"), list) else []
+    clean_tracks: list[dict[str, str]] = []
+    for item in tracks[:track_count]:
+        if not isinstance(item, dict):
+            continue
+        track_title = str(item.get("title") or "").strip()
+        artist = str(item.get("artist") or "").strip()
+        if not track_title:
+            continue
+        clean_tracks.append(
+            {
+                "title": track_title,
+                "artist": artist,
+                "album": str(item.get("album") or "").strip(),
+                "reason": str(item.get("reason") or "").strip(),
+            }
+        )
+    if len(clean_tracks) < track_count:
+        fallback_tracks = fallback.get("tracks") if isinstance(fallback.get("tracks"), list) else []
+        for item in fallback_tracks:
+            if len(clean_tracks) >= track_count:
+                break
+            if not isinstance(item, dict):
+                continue
+            clean_tracks.append(item)
+    return {
+        "title": title_value or title,
+        "intro": intro or fallback["intro"],
+        "tracks": clean_tracks[:track_count],
+        "outro": outro or fallback["outro"],
+        "generator": "minimax-chat",
+    }
+
+
+def build_minimax_radio_prompt(
+    title: str,
+    today: date,
+    weather: dict[str, Any],
+    recent_tracks: list[dict[str, Any]],
+    track_count: int,
+) -> str:
+    track_lines = []
+    for index, track in enumerate(recent_tracks[:20], start=1):
+        track_lines.append(
+            f"{index}. {first_string_value(track, 'title', 'name') or '未知歌曲'} - "
+            f"{radio_artist_name(track)} - {radio_album_name(track) or '未知专辑'}"
+        )
+    weather_line = build_weather_intro(weather) or "天气暂时未知。"
+    return (
+        "你是一个私人音乐电台主持人，请根据日期、天气和我的最近听歌记录，生成一期自然的中文电台脚本。\n"
+        "要求：\n"
+        f"- 日期：{today.isoformat()}\n"
+        f"- 标题：{title}\n"
+        f"- 天气：{weather_line}\n"
+        f"- 选择 {track_count} 首歌，优先从最近听歌记录里选；如果推荐新歌，必须给出歌名和歌手。\n"
+        "- 开场要介绍天气、今天适合听什么、每首歌为什么推荐，然后自然进入播放。\n"
+        "- 结束语要收束今天的情绪，不要像测试文本。\n"
+        "- 只输出 JSON，不要 markdown，不要额外解释。\n"
+        "JSON 格式："
+        '{"title":"...","intro":"...","tracks":[{"title":"...","artist":"...","album":"可空","reason":"..."}],"outro":"..."}\n'
+        "最近听歌记录：\n"
+        + "\n".join(track_lines)
+    )
+
+
+async def generate_minimax_chat_json(prompt: str) -> dict[str, Any]:
+    settings = get_settings()
+    minimax_key = resolved_minimax_key()
+    url = f"https://api.minimax.chat/v1/text/chatcompletion_v2?GroupId={settings.minimax_group_id}"
+    payload = {
+        "model": settings.minimax_chat_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是一个会输出严格 JSON 的中文私人音乐电台文案助手。",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 1200,
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {minimax_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"MiniMax Chat HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    content = extract_minimax_chat_content(data)
+    return parse_json_from_text(content)
+
+
+def extract_minimax_chat_content(data: dict[str, Any]) -> str:
+    if isinstance(data.get("choices"), list) and data["choices"]:
+        choice = data["choices"][0]
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict):
+                return str(message.get("content") or "")
+            return str(choice.get("text") or "")
+    if isinstance(data.get("reply"), str):
+        return data["reply"]
+    if isinstance(data.get("data"), dict):
+        for key in ("reply", "content", "text"):
+            if isinstance(data["data"].get(key), str):
+                return data["data"][key]
+    return json.dumps(data, ensure_ascii=False)
+
+
+def parse_json_from_text(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re_sub_code_fence(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        parsed = json.loads(cleaned[start : end + 1])
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def re_sub_code_fence(value: str) -> str:
+    lines = value.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def build_fallback_radio_script_plan(
+    title: str,
+    today: date,
+    weather: dict[str, Any],
+    recent_tracks: list[dict[str, Any]],
+    track_count: int,
+) -> dict[str, Any]:
+    tracks = recent_tracks[:track_count]
+    intro = build_radio_intro_script(title, tracks, weather=weather, daily=True)
+    outro = build_radio_outro_script(title, tracks, weather=weather)
+    return {
+        "title": title,
+        "intro": intro,
+        "tracks": [
+            {
+                "title": first_string_value(track, "title", "name") or "未知歌曲",
+                "artist": radio_artist_name(track),
+                "album": radio_album_name(track),
+                "reason": radio_recommend_reason(index, first_string_value(track, "title", "name") or "未知歌曲", radio_artist_name(track), weather),
+            }
+            for index, track in enumerate(tracks, start=1)
+        ],
+        "outro": outro,
+        "generator": "fallback",
+        "date": today.isoformat(),
+    }
+
+
+async def ensure_radio_mix_tracks_available(
+    recommendations: list[Any],
+    track_count: int,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    missing: list[dict[str, str]] = []
+    for item in recommendations[:track_count]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        artist = str(item.get("artist") or "").strip()
+        if not title:
+            continue
+        local = find_local_track_for_radio(title, artist)
+        if local:
+            selected.append(local)
+        else:
+            missing.append({"title": title, "artist": artist})
+
+    if missing:
+        for item in missing:
+            download_recommended_track(item["title"], item["artist"])
+        from .local_music import scan_local_music_library
+        from .metadata_scrape import ScrapeJobCreateRequest, create_scrape_job
+
+        scan_local_music_library(incremental=True)
+        create_scrape_job(
+            ScrapeJobCreateRequest(
+                providers=["qqmusic"],
+                missing=["lyrics", "cover"],
+                limit=50,
+                candidateLimit=3,
+                autoApply=True,
+                minConfidence=0.92,
+            )
+        )
+        for item in missing:
+            local = find_local_track_for_radio(item["title"], item["artist"])
+            if local:
+                selected.append(local)
+    return dedupe_radio_tracks(selected)[:track_count]
+
+
+def find_local_track_for_radio(title: str, artist: str) -> dict[str, Any] | None:
+    normalized_title = normalize_radio_text(title)
+    normalized_artist = normalize_radio_text(artist)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM music_tracks
+            WHERE title != '' OR file_name != ''
+            ORDER BY play_count DESC, updated_at DESC
+            LIMIT 500
+            """
+        ).fetchall()
+    best_row = None
+    best_score = 0.0
+    for row in rows:
+        row_title = normalize_radio_text(row["title"] or Path(row["source_path"]).stem)
+        row_artist = normalize_radio_text(row["artist"])
+        score = 0.0
+        if normalized_title and normalized_title == row_title:
+            score += 0.75
+        elif normalized_title and (normalized_title in row_title or row_title in normalized_title):
+            score += 0.45
+        if normalized_artist and row_artist and normalized_artist in row_artist:
+            score += 0.25
+        if score > best_score:
+            best_score = score
+            best_row = row
+    if best_row is not None and best_score >= 0.7:
+        return local_track_row_to_radio_dict(best_row)
+    return None
+
+
+def download_recommended_track(title: str, artist: str) -> dict[str, Any]:
+    from .sqmusic_download import choose_br_type, normalize_track_record, sqmusic_request
+
+    keyword = f"{title} {artist}".strip()
+    settings = get_settings()
+    for plug_name in [item.strip() for item in settings.sqmusic_plug_names.split(",") if item.strip()]:
+        try:
+            payload = sqmusic_request(
+                "GET",
+                "/api/music/searchSong",
+                params={
+                    "plugName": plug_name,
+                    "keyword": keyword,
+                    "pageSize": "5",
+                    "pageIndex": "1",
+                },
+            )
+        except Exception:
+            continue
+        if payload.get("code") != 200:
+            continue
+        records = ((payload.get("data") or {}).get("records") or [])
+        candidates = [normalize_track_record(record) for record in records if isinstance(record, dict)]
+        candidates = sorted(
+            candidates,
+            key=lambda item: score_download_candidate(title, artist, item),
+            reverse=True,
+        )
+        if not candidates:
+            continue
+        candidate = candidates[0]
+        if score_download_candidate(title, artist, candidate) < 0.65:
+            continue
+        br_type = choose_br_type(candidate.get("brTypes") or [])
+        if not br_type:
+            continue
+        body = {
+            "id": candidate["id"],
+            "plugName": candidate["plugName"],
+            "name": candidate["name"],
+            "artistName": candidate.get("artistNames") or [candidate.get("artistName", "")],
+            "artistids": candidate.get("artistids") or [],
+            "albumName": candidate.get("albumName") or "",
+            "albumid": candidate.get("albumid") or "",
+            "duration": candidate.get("duration") or "",
+            "pic": candidate.get("pic") or "",
+            "lyric": candidate.get("lyric"),
+            "lyricId": candidate.get("lyricId"),
+            "brTypes": candidate.get("brTypes") or [],
+            "dataInfo": candidate.get("dataInfo") or {},
+            "brType": br_type,
+        }
+        response = sqmusic_request("POST", "/api/download/downloadSong", body=body)
+        return {
+            "status": "queued" if response.get("code") == 200 else "error",
+            "track": candidate,
+            "brType": br_type,
+            "sqmusic": response,
+        }
+    return {"status": "not_found", "title": title, "artist": artist}
+
+
+def score_download_candidate(title: str, artist: str, item: dict[str, Any]) -> float:
+    query_title = normalize_radio_text(title)
+    query_artist = normalize_radio_text(artist)
+    item_title = normalize_radio_text(item.get("name"))
+    item_artist = normalize_radio_text(item.get("artistName"))
+    score = 0.0
+    if query_title and query_title == item_title:
+        score += 0.75
+    elif query_title and (query_title in item_title or item_title in query_title):
+        score += 0.45
+    if query_artist and query_artist in item_artist:
+        score += 0.25
+    if any(word in item_title for word in ("live", "演唱会", "dj", "remix", "伴奏", "cover")):
+        score -= 0.1
+    return score
+
+
+def dedupe_radio_tracks(tracks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result = []
+    for track in tracks:
+        key = str(track.get("id") or "") or normalize_radio_text(
+            f"{first_string_value(track, 'title', 'name')} {radio_artist_name(track)}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(track)
+    return result
+
+
+def normalize_radio_text(value: Any) -> str:
+    text = str(value or "").lower().strip()
+    for item in (" ", "\t", "\n", "-", "_", "《", "》", "(", ")", "（", "）", "[", "]", "【", "】", "'", '"'):
+        text = text.replace(item, "")
+    return text
+
+
 async def generate_radio_episode(
     *,
     job_id: str,
@@ -1203,6 +1777,207 @@ async def generate_radio_episode(
             ),
         )
     return episode
+
+
+async def generate_radio_mix_episode(
+    *,
+    job_id: str,
+    title: str,
+    track_ids: list[str],
+    script: str,
+    intro_script: str,
+    outro_script: str,
+    tracks: list[dict[str, Any]],
+    force_mock_tts: bool = False,
+) -> dict[str, Any]:
+    settings = get_settings()
+    output_dir = Path(settings.radio_output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    episode_id = uuid.uuid4().hex
+    intro_path = output_dir / f"{episode_id}-intro.mp3"
+    outro_path = output_dir / f"{episode_id}-outro.mp3"
+    final_path = output_dir / f"{episode_id}-mix.mp3"
+
+    generator = "minimax-chat+minimax-tts+ffmpeg"
+    if not force_mock_tts and resolved_minimax_key() and settings.minimax_group_id:
+        intro_path.write_bytes(await generate_minimax_tts(intro_script))
+        outro_path.write_bytes(await generate_minimax_tts(outro_script))
+    else:
+        generator = "fallback-script+mock-tts+ffmpeg"
+        intro_path = output_dir / f"{episode_id}-intro.wav"
+        outro_path = output_dir / f"{episode_id}-outro.wav"
+        write_mock_radio_wav(intro_path, intro_script)
+        write_mock_radio_wav(outro_path, outro_script)
+
+    music_paths = []
+    for track in tracks:
+        source_path = Path(str(track.get("sourcePath") or ""))
+        if source_path.exists() and source_path.is_file():
+            music_paths.append(source_path)
+    if not music_paths:
+        raise RuntimeError("没有找到可合并的本地音乐文件。")
+
+    concat_audio_files([intro_path, *music_paths, outro_path], final_path)
+    summary = build_radio_summary(tracks)
+    duration_seconds = probe_audio_duration_seconds(final_path)
+    segments = build_radio_mix_segments(
+        episode_id=episode_id,
+        tracks=tracks,
+        intro_path=intro_path,
+        outro_path=outro_path,
+        final_path=final_path,
+        final_duration_seconds=duration_seconds,
+    )
+    episode = {
+        "id": episode_id,
+        "title": title,
+        "summary": summary,
+        "script": script,
+        "audioPath": str(final_path),
+        "outroAudioPath": str(outro_path),
+        "audioFormat": "mp3",
+        "durationSeconds": duration_seconds,
+        "outroDurationSeconds": probe_audio_duration_seconds(outro_path),
+        "sourceTrackIds": track_ids,
+        "segments": segments,
+        "generator": generator,
+        "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
+        "outroStreamUrl": f"/v1/music/radio/episodes/{episode_id}/outro/stream",
+    }
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_radio_episodes (
+                id, title, summary, script, audio_path, outro_audio_path,
+                audio_format, duration_seconds, outro_duration_seconds,
+                source_track_ids_json, segments_json, generator
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                episode_id,
+                title,
+                summary,
+                script,
+                str(final_path),
+                str(outro_path),
+                "mp3",
+                duration_seconds,
+                episode["outroDurationSeconds"],
+                json.dumps(track_ids, ensure_ascii=False),
+                json.dumps(segments, ensure_ascii=False),
+                generator,
+            ),
+        )
+    return episode
+
+
+def concat_audio_files(input_paths: list[Path], output_path: Path) -> None:
+    if len(input_paths) < 2:
+        raise RuntimeError("合并音频至少需要两段输入。")
+    filter_inputs = "".join(f"[{index}:a]" for index in range(len(input_paths)))
+    filter_complex = f"{filter_inputs}concat=n={len(input_paths)}:v=0:a=1[a]"
+    command = ["ffmpeg", "-y"]
+    for path in input_paths:
+        command.extend(["-i", str(path)])
+    command.extend(
+        [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[a]",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            str(output_path),
+        ]
+    )
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=600)
+    except FileNotFoundError as error:
+        raise RuntimeError("未找到 ffmpeg，请在 NAS 镜像或系统中安装 ffmpeg。") from error
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg 合并失败：{result.stderr[-1000:]}")
+
+
+def probe_audio_duration_seconds(path: Path) -> int:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return 0
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(float(result.stdout.strip()))
+    except ValueError:
+        return 0
+
+
+def build_radio_mix_segments(
+    *,
+    episode_id: str,
+    tracks: list[dict[str, Any]],
+    intro_path: Path,
+    outro_path: Path,
+    final_path: Path,
+    final_duration_seconds: int,
+) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = [
+        {
+            "type": "intro",
+            "id": f"radio_{episode_id}_intro",
+            "title": "开场口播",
+            "artist": "MiniMax 电台主持",
+            "audioPath": str(intro_path),
+            "durationSeconds": probe_audio_duration_seconds(intro_path),
+        }
+    ]
+    for track in tracks:
+        segments.append(
+            {
+                "type": "track",
+                "id": str(track.get("id") or ""),
+                "title": first_string_value(track, "title", "name") or "未知歌曲",
+                "artist": radio_artist_name(track),
+                "album": radio_album_name(track),
+                "sourcePath": str(track.get("sourcePath") or ""),
+                "durationSeconds": int(track.get("durationSeconds") or 0),
+            }
+        )
+    segments.append(
+        {
+            "type": "outro",
+            "id": f"radio_{episode_id}_outro",
+            "title": "结束口播",
+            "artist": "MiniMax 电台主持",
+            "audioPath": str(outro_path),
+            "durationSeconds": probe_audio_duration_seconds(outro_path),
+        }
+    )
+    segments.append(
+        {
+            "type": "full_mix",
+            "id": f"radio_{episode_id}_mix",
+            "title": "完整电台合并音频",
+            "artist": "Personal OS Agent",
+            "audioPath": str(final_path),
+            "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
+            "durationSeconds": final_duration_seconds,
+        }
+    )
+    return segments
 
 
 async def generate_minimax_tts(text: str) -> bytes:

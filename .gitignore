@@ -49,6 +49,7 @@ data/*
 !data/secrets/
 !data/secrets/agent-server.env.example
 !data/secrets/daoliyu.env.example
+!data/secrets/music-sources.env.example
 data/secrets/*.env
 
 # Private/self-use capabilities

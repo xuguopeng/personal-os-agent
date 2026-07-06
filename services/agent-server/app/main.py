@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from .auth import require_basic_auth, websocket_auth_is_allowed
 from .config import get_settings
 from .db import db, initialize_database
 from .models import (
@@ -24,6 +25,10 @@ from .repository import (
 )
 from .music import router as music_router
 from .music import start_radio_scheduler, stop_radio_scheduler
+from .local_music import router as local_music_router
+from .listening import router as listening_router
+from .metadata_scrape import router as metadata_scrape_router
+from .sqmusic_download import router as sqmusic_download_router
 
 app = FastAPI(title="Personal OS Agent Server", version="0.1.0")
 app.add_middleware(
@@ -33,7 +38,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_origins=["*"],
 )
+app.middleware("http")(require_basic_auth)
+app.include_router(local_music_router)
+app.include_router(metadata_scrape_router)
+app.include_router(sqmusic_download_router)
 app.include_router(music_router)
+app.include_router(listening_router)
 active_connections: dict[str, WebSocket] = {}
 
 
@@ -127,6 +137,8 @@ def create_task_endpoint(input: TaskCreateRequest) -> dict:
 
 @app.websocket("/v1/ws/{device_id}")
 async def websocket_endpoint(websocket: WebSocket, device_id: str) -> None:
+    if not await websocket_auth_is_allowed(websocket):
+        return
     await websocket.accept()
     active_connections[device_id] = websocket
     try:

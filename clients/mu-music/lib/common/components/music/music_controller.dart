@@ -145,6 +145,7 @@ class GlobalMusicController extends GetxController {
             // 添加这些头部来帮助处理HTTP音频流
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
+            ...HttpUtil().authHeaders,
           },
         ),
       );

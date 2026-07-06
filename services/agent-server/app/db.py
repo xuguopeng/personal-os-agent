@@ -120,6 +120,157 @@ CREATE TABLE IF NOT EXISTS music_radio_episodes (
     created_at TEXT NOT NULL DEFAULT current_timestamp,
     updated_at TEXT NOT NULL DEFAULT current_timestamp
 );
+
+CREATE TABLE IF NOT EXISTS music_tracks (
+    id TEXT PRIMARY KEY,
+    source_path TEXT NOT NULL UNIQUE,
+    file_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    artist TEXT NOT NULL DEFAULT '',
+    album TEXT NOT NULL DEFAULT '',
+    album_artist TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    track_number INTEGER NOT NULL DEFAULT 0,
+    disc_number INTEGER NOT NULL DEFAULT 0,
+    year TEXT NOT NULL DEFAULT '',
+    genre TEXT NOT NULL DEFAULT '',
+    lyrics TEXT NOT NULL DEFAULT '',
+    cover_path TEXT NOT NULL DEFAULT '',
+    file_format TEXT NOT NULL DEFAULT '',
+    file_size INTEGER NOT NULL DEFAULT 0,
+    file_mtime REAL NOT NULL DEFAULT 0,
+    play_count INTEGER NOT NULL DEFAULT 0,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    last_played_at TEXT,
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp
+);
+
+CREATE INDEX IF NOT EXISTS idx_music_tracks_title ON music_tracks(title);
+CREATE INDEX IF NOT EXISTS idx_music_tracks_artist ON music_tracks(artist);
+CREATE INDEX IF NOT EXISTS idx_music_tracks_album ON music_tracks(album);
+CREATE INDEX IF NOT EXISTS idx_music_tracks_favorite ON music_tracks(favorite);
+CREATE INDEX IF NOT EXISTS idx_music_tracks_last_played ON music_tracks(last_played_at DESC);
+
+CREATE TABLE IF NOT EXISTS music_metadata_scrape_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    mode TEXT NOT NULL DEFAULT 'missing',
+    providers_json TEXT NOT NULL DEFAULT '[]',
+    missing_json TEXT NOT NULL DEFAULT '[]',
+    apply_fields_json TEXT NOT NULL DEFAULT '[]',
+    limit_count INTEGER NOT NULL DEFAULT 50,
+    candidate_limit INTEGER NOT NULL DEFAULT 3,
+    auto_apply INTEGER NOT NULL DEFAULT 0,
+    min_confidence REAL NOT NULL DEFAULT 0.92,
+    processed_count INTEGER NOT NULL DEFAULT 0,
+    matched_count INTEGER NOT NULL DEFAULT 0,
+    applied_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_music_metadata_jobs_status ON music_metadata_scrape_jobs(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS music_metadata_scrape_candidates (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    source_id TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0,
+    candidate_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    applied_fields_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp,
+    FOREIGN KEY(job_id) REFERENCES music_metadata_scrape_jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(track_id) REFERENCES music_tracks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_music_metadata_candidates_job ON music_metadata_scrape_candidates(job_id, confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_music_metadata_candidates_track ON music_metadata_scrape_candidates(track_id, confidence DESC);
+
+CREATE TABLE IF NOT EXISTS music_play_history (
+    id TEXT PRIMARY KEY,
+    track_id TEXT NOT NULL,
+    played_at TEXT NOT NULL DEFAULT current_timestamp,
+    source TEXT NOT NULL DEFAULT 'client',
+    device_id TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY(track_id) REFERENCES music_tracks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_music_play_history_played ON music_play_history(played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_music_play_history_track ON music_play_history(track_id);
+
+CREATE TABLE IF NOT EXISTS music_playlists (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp
+);
+
+CREATE TABLE IF NOT EXISTS music_playlist_tracks (
+    playlist_id TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    PRIMARY KEY (playlist_id, track_id),
+    FOREIGN KEY(playlist_id) REFERENCES music_playlists(id) ON DELETE CASCADE,
+    FOREIGN KEY(track_id) REFERENCES music_tracks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS listening_sources (
+    source_key TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'plugin',
+    plugin_name TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'not_configured',
+    config_hint TEXT NOT NULL DEFAULT '',
+    last_synced_at TEXT,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp
+);
+
+CREATE TABLE IF NOT EXISTS listening_events (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_event_id TEXT NOT NULL,
+    source_user_id TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL DEFAULT 'history',
+    track_name TEXT NOT NULL,
+    artist_name TEXT NOT NULL DEFAULT '',
+    album_name TEXT NOT NULL DEFAULT '',
+    play_count INTEGER NOT NULL DEFAULT 1,
+    last_played_at TEXT,
+    confidence REAL NOT NULL DEFAULT 0.8,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT current_timestamp,
+    updated_at TEXT NOT NULL DEFAULT current_timestamp,
+    UNIQUE(source, source_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_listening_events_source ON listening_events(source);
+CREATE INDEX IF NOT EXISTS idx_listening_events_track_artist ON listening_events(track_name, artist_name);
+CREATE INDEX IF NOT EXISTS idx_listening_events_last_played ON listening_events(last_played_at DESC);
+
+CREATE TABLE IF NOT EXISTS listening_sync_runs (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    imported_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT current_timestamp,
+    finished_at TEXT
+);
 """
 
 
@@ -146,6 +297,7 @@ def initialize_database() -> None:
         conn.executescript(SCHEMA)
         migrate_database(conn)
         seed_modules(conn)
+        seed_listening_sources(conn)
 
 
 def migrate_database(conn: sqlite3.Connection) -> None:
@@ -193,4 +345,69 @@ def seed_modules(conn: sqlite3.Connection) -> None:
             updated_at = current_timestamp
         """,
         modules,
+    )
+
+
+def seed_listening_sources(conn: sqlite3.Connection) -> None:
+    sources = [
+        (
+            "daoliyu",
+            "Daoliyu / NAS",
+            "builtin",
+            "daoliyu",
+            1,
+            "ready",
+            "读取 Daoliyu/NAS 播放次数和最近播放时间。",
+        ),
+        (
+            "netease",
+            "网易云音乐",
+            "private_plugin",
+            "netease_history",
+            1,
+            "not_configured",
+            "支持网易云接口片段/JSON 导入；如需自动同步，把私有插件放到 LISTENING_PLUGIN_DIRS。",
+        ),
+        (
+            "qqmusic",
+            "QQ 音乐",
+            "client_or_import",
+            "",
+            0,
+            "not_configured",
+            "网页端暂未发现个人播放记录接口；先通过本机播放采集、手动导入或后续客户端插件汇总。",
+        ),
+        (
+            "kugou",
+            "酷狗音乐",
+            "client_or_import",
+            "",
+            0,
+            "not_configured",
+            "网页端暂未发现个人播放记录接口；先通过本机播放采集、手动导入或后续客户端插件汇总。",
+        ),
+        (
+            "kuwo",
+            "酷我音乐",
+            "client_or_import",
+            "",
+            0,
+            "not_configured",
+            "网页端暂未发现个人播放记录接口；先通过本机播放采集、手动导入或后续客户端插件汇总。",
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO listening_sources (
+            source_key, display_name, source_type, plugin_name, enabled, status, config_hint
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_key) DO UPDATE SET
+            display_name = excluded.display_name,
+            source_type = excluded.source_type,
+            plugin_name = excluded.plugin_name,
+            enabled = excluded.enabled,
+            config_hint = excluded.config_hint,
+            updated_at = current_timestamp
+        """,
+        sources,
     )

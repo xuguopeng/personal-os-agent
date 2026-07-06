@@ -9,7 +9,25 @@
 /// 常量
 class Constants {
   // 服务 api
-  static const apiUrl = 'https://os.xuguopeng.com/v1/music';
+  static const localApiUrl = 'http://127.0.0.1:8088/v1/music';
+  static const customLocalApiUrl =
+      String.fromEnvironment('NAS_LOCAL_API_URL', defaultValue: '');
+  static const publicApiUrl = String.fromEnvironment(
+    'NAS_PUBLIC_API_URL',
+    defaultValue: 'https://os.xuguopeng.com/v1/music',
+  );
+  static const apiUrl = localApiUrl;
+  static const apiUrls = [
+    localApiUrl,
+    'http://localhost:8088/v1/music',
+    'http://192.168.10.21:8088/v1/music',
+    customLocalApiUrl,
+    publicApiUrl,
+  ];
+  static const agentUsername =
+      String.fromEnvironment('AGENT_SERVER_USERNAME', defaultValue: '');
+  static const agentPassword =
+      String.fromEnvironment('AGENT_SERVER_PASSWORD', defaultValue: '');
   static const musicApiPath = '/api';
   static const staticPath = '/static';
 }

@@ -137,3 +137,39 @@
 - Flutter macOS 音乐页按新参考图重构：桌面端改为暗色星点背景、左侧纯图标导航、中央音乐库表格、右侧今日电台/最近播放/喜欢卡片，以及独立的大底部播放栏；播放、上一首、下一首、喜欢、进度拖动和播放队列继续接入真实播放器。
 - 开源边界收紧：`.gitignore` 增加 private/self-use 能力规则，真实密钥、自用插件目录、QQ/网易/酷狗/酷我等第三方音乐元数据 provider 实现默认不进入 git；开源仓库只保留接口、示例配置和说明。
 - 仓库方向调整为 NAS 音乐服务：移除旧 React/Tauri 应用壳、node_modules/dist/build 缓存和非 NAS 产品规划文档；保留 `services/agent-server`、Docker 配置、数据/密钥示例、NAS 文档和操作日志；将 Flutter 音乐客户端从原路径移动到 `clients/mu-music`，并清理 build、Pods、Gradle 缓存等生成物。
+- 新增全网听歌记录中心第一版：NAS 服务端增加 `/v1/listening` 路由、`listening_sources/listening_events/listening_sync_runs` SQLite 表、Daoliyu/NAS 内置同步、统一听歌画像接口，以及网易云/QQ 音乐私有插件协议；真实 cookie/session 放入 `music-sources.env`，私有抓取插件放 ignored 目录，不进入开源仓库。
+- 全网听歌记录来源补齐：`/v1/listening` 默认来源增加酷狗音乐、酷我音乐，`music-sources.env.example` 增加 `KUGOU_*`/`KUWO_*` 配置项，私有插件协议扩展到 `kugou_history.py` 和 `kuwo_history.py`；本地 ignored 目录已放酷狗/酷我 JSON 导入模板。
+- 网易云听歌排行样本接入：本地 ignored 的网易云私有插件支持解析 DevTools 复制出来的 `"allData": [...]` 片段格式（含尾逗号）；用户提供的 100 条网易云记录可完整解析并导入统一 `listening_events`，测试结果为 100 条、累计播放计数 14,558。
+- 全网听歌记录策略修正：确认 QQ 音乐、酷狗音乐、酷我音乐网页端当前没有稳定的个人播放记录入口；服务端默认不再把三者作为可自动同步插件启用，改为 `client_or_import` 来源，后续通过 Flutter/桌面端播放采集、标准 JSON/CSV 导入或个人自用客户端插件汇总到统一画像。
+- QQ 音乐最近播放截图导入：将用户提供的 QQ 音乐“最近播放 66 首”长截图人工整理为 ignored 的 `data/private_exports/qq-recent-from-screenshot-2026-07-05.json` 和 CSV 校对表；本地临时库验证 66 条可写入 `listening_events`，来源标记为 `qqmusic/recent_screenshot`，播放次数统一按 1 处理。
+- NAS 服务端登录保护：新增 `AGENT_SERVER_USERNAME` / `AGENT_SERVER_PASSWORD` Basic Auth；配置后 `/v1/*`、`/docs`、`/redoc`、`/openapi.json` 都需要账号密码访问，`/health` 继续公开给 NAS/反代健康检查；本地开发未配置账号密码时保持放行。
+- 音乐流代理收口：确认 Daoliyu Docker 通过宿主机 `5173` 暴露前端服务，Agent Server 使用 `http://host.docker.internal:5173` 优先连接；Flutter 播放 URL 从 Daoliyu 直连 `/api/tracks/{id}/stream` 改为 Agent Server 的 `/v1/music/audio/{track_id}`，由服务端登录 Daoliyu、拼接 token 并代理音频流。
+- Flutter NAS 访问优先级：客户端 HTTP 工具改为多地址自动兜底，默认先试本机/局域网 Agent Server，再退到 `https://os.xuguopeng.com/v1/music`；成功地址会被复用到接口、封面、电台音频和歌曲流。新增 `NAS_LOCAL_API_URL`、`NAS_PUBLIC_API_URL`、`AGENT_SERVER_USERNAME`、`AGENT_SERVER_PASSWORD` dart-define，接口和 just_audio 音频流都会携带 Basic Auth。
+- 自有 NAS 音乐服务第一批：服务端新增 `music_tracks/music_playlists/music_playlist_tracks` SQLite 表和 `/v1/music/api/admin/scan` 扫描接口，使用 Mutagen 读取本地音乐标签、歌词和内嵌封面，封面缓存到 `MUSIC_COVER_DIR`。
+- 自有 NAS 音乐播放接口：新增 `/v1/music/api/tracks`、`/v1/music/api/tracks/{id}`、`/v1/music/audio/{id}`、`/v1/music/covers/{id}`、歌单、喜欢、播放状态接口；音频流支持 HTTP Range，可供 Flutter/just_audio 播放和拖动。
+- 自有服务迁移策略：`local_music_router` 放在旧 Daoliyu 代理路由之前，Flutter 现有 Daoliyu 风格字段通过兼容字段返回；未覆盖的旧路径仍临时 fallback 到 Daoliyu，后续可逐步停用。
+- 自有 NAS 音乐验证：本地临时生成 wav 文件并使用 FastAPI TestClient 验证扫描、歌曲列表、歌曲详情、Range 音频流和播放记录同步，`/v1/music/audio/{id}` 返回 `206 Partial Content`。
+- 自有 NAS 音乐服务第二批：新增后台扫描 `/api/admin/scan/background` 和 `/api/admin/scan/status`，新增歌手、专辑、最近播放、播放历史、统计接口，播放时写入 `music_play_history` 并同步统一听歌画像。
+- 自有 NAS 音乐第二批验证：本地临时库验证 2 首歌的扫描、歌手/专辑聚合、喜欢、播放历史、后台扫描状态和音频 Range，所有关键接口返回正常。
+- 自有 NAS 音乐服务第三批：扫描支持同名 `.lrc/.txt` 歌词、同名封面图和同目录 `cover/folder/front/album/封面` 图片；新增元数据缺失报告 `/api/admin/metadata/report`。
+- 歌词和元数据接口：新增 `/api/tracks/{id}/lyrics` GET/PUT，返回 LRC 时间轴 `{timeMs,text}`；新增 `/api/tracks/{id}/metadata` PATCH，可修正标题、歌手、专辑、年份、流派和音轨号。
+- 歌单完整管理：新增歌单改名/描述、删除、批量加曲、清空、重排序接口，为客户端歌单编辑页做服务端支撑。
+- 扫描可观测性增强：扫描状态增加当前文件、已扫描数、导入数、跳过数、错误数，并新增 `/api/admin/scan/cancel` 取消入口。
+- 电台去 Daoliyu 化第一步：每日/手动电台选歌优先读取自有 `music_tracks` 和 `music_play_history`，只有本地无曲目时才 fallback 到旧 Daoliyu。
+- 自有 NAS 音乐第三批验证：本地临时库验证旁路 LRC 保留换行并解析时间轴、歌单批量/重排/删除、元数据 PATCH、扫描状态和本地电台选歌。
+- 自用版元数据刮削第一批：新增公开刮削工作流 `/api/admin/metadata/scrape/status|preview|missing|apply`，核心仓库只保留插件协议和服务端预览/应用逻辑，真实 provider 放 ignored 的 `private_plugins`。
+- 私有刮削插件协议：新增 `services/agent-server/app/metadata_plugins/README.md`，定义 `search(config) -> list[dict]` 候选格式；新增 `METADATA_PLUGIN_DIRS` 配置和 `music-sources.env.example` 示例。
+- 本地私有刮削模板：在 ignored 的 `services/agent-server/private_plugins/local_metadata.py` 增加 JSON 候选 provider，用 `MUSIC_METADATA_JSON` 做本地测试数据源，后续 QQ/网易云/sqmusic 可按同协议扩展。
+- 自用版刮削验证：临时曲库用 `local_metadata` provider 完成 preview、missing、apply，成功把歌手、专辑、年份、流派、LRC 歌词写回 `music_tracks`，并确认真实私有插件路径被 git ignore。
+- 真实联网刮削验证：在 ignored 的 `services/agent-server/private_plugins/netease_metadata.py` 实现网易云私有 provider，真实调用网易云搜索、歌曲详情和歌词接口；端到端测试确认 preview 返回候选，apply 后歌词写入 SQLite，封面下载到 `MUSIC_COVER_DIR`，并可通过 `/v1/music/covers/{id}` 返回 `image/jpeg`。
+- QQ 音乐真实刮削验证：在 ignored 的 `services/agent-server/private_plugins/qqmusic_metadata.py` 实现 QQ 音乐私有 provider，真实调用 QQ 搜索和歌词接口；测试《晴天》命中 `周杰伦 / 叶惠美` 原曲，下载 QQ 专辑封面，写入 LRC 歌词并通过 `/v1/music/covers/{id}` 返回封面图片。
+- 元数据刮削任务化：新增 `music_metadata_scrape_jobs/music_metadata_scrape_candidates` 表和 `/metadata/scrape/jobs` 后台任务接口，批量刮削会保存每首歌候选、置信度、应用状态和错误；支持高置信度自动应用，也支持后续手动应用已保存候选。已用本地私有 provider 验证任务创建、候选保存、自动应用和进度显示。
+- sqmusic 接口文档接入：读取 `sqmusic_api.json` 后新增 ignored 的 `sqmusic_metadata.py` 私有 provider，按 `/api/music/searchSong` 搜索、`/api/music/getLyric` 获取 LRC，并把搜索结果的 `pic` 作为封面候选；公开仓库只更新 `SQMUSIC_BASE_URL`/`SQMUSIC_PLUG_NAMES` 示例配置和协议说明。
+- sqmusic 下载桥接：新增 `/v1/music/api/download/sqmusic/status|search|song|tasks|rescan`，服务端只通过 sqmusic 搜索、选择音质和提交下载任务；下载后的缺失歌词/封面不走 sqmusic，`rescan` 会扫描本地曲库并可自动启动 `qqmusic` 元数据刮削任务补全。
+- sqmusic 下载真实验证：通过 `kw` 下载英文歌 `Shape of You - Ed Sheeran`，自动选择 `KW_FLAC_2000`，sqmusic 返回任务 `id=58` 且状态轮询为 `success`；新增可选 `SQMUSIC_USERNAME/SQMUSIC_PASSWORD` 登录配置，登录会话只在单次代理请求内使用。Mac 本地无法扫描 NAS 的 `/volume1/media/音乐`，需部署到 NAS 后执行 `rescan` 扫入曲库。
+- 电台合并生成第一版：新增 `/v1/music/radio/daily/build`，根据日期、陕西西安天气和最近听歌记录生成电台脚本，MiniMax 对话模型负责文案，MiniMax TTS 生成开头/结束口播，中间串入本地音乐文件，最后用 ffmpeg 合并为完整 MP3；本地缺歌时会尝试 sqmusic 下载，下载后扫描曲库并启动 `qqmusic` 歌词/封面刮削。Docker 镜像新增 ffmpeg 依赖。
+- NAS 音乐目录收口：Agent Server 音乐库扫描根目录改为三路合并 `/data/media/daoliyu,/data/media/sqmusic,/data/media/local`，分别映射宿主机 `/volume1/media/音乐`、`/volume1/docker/sqmusic/file`、`/volume1/docker/personal-os-agent/data/media`；新增 `/api/admin/scan/full` 作为全量扫描别名，客户端可调用全量/增量/后台扫描接口刷新曲库。
+- Flutter 客户端接入新 NAS 能力：桌面音乐页新增增量扫描、全量扫描和 sqmusic 下载入口；“今日电台/生成电台”统一调用新的 `/radio/daily/build` 合并音频接口；合并电台节目在客户端只作为一条完整音频播放，避免把口播、歌曲和 full mix 重复塞入播放队列。
+- Flutter macOS 窗口体验修正：原生窗口默认改为 `1440x900`、最小 `1180x760` 并居中打开；macOS 标题栏改为透明隐藏标题，内容延伸到标题栏区域，去掉页面内伪造的最小化/关闭按钮；左侧导航和右侧信息栏增加滚动/高度约束，底部播放栏缩到 108px，减少小窗口 overflow。
+- Flutter 桌面音乐页第一轮模块拆分：`desktop_music_home.dart` 从 3489 行降到 1889 行；新增 `pages/desktop_music/desktop_music_models.dart`、`desktop_music_background.dart`、`desktop_music_reference_widgets.dart`、`desktop_music_library_widgets.dart`，把视图枚举、星点背景、参考图风格按钮/卡片/导航、电台条目等拆出；删除旧桌面 UI 残留组件，并把新顶部“导入音乐/刷新”接回 sqmusic 下载和增量扫描逻辑。
+- Docker Compose 服务命名更新：服务名从 `agent-server` 改为 `music-server`，容器名从 `personal-os-agent-server` 改为 `mu-music-server`；数据卷和 SQLite 路径暂时保留原值，避免 NAS 重新部署后丢失已有数据和密钥。
