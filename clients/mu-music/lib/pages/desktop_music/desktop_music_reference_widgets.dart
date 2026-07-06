@@ -248,9 +248,17 @@ class _ReferencePanel extends StatelessWidget {
 }
 
 class _RadioWaveform extends StatefulWidget {
-  _RadioWaveform({required this.active});
+  _RadioWaveform({
+    required this.active,
+    this.color,
+    this.inactiveColor,
+    this.barCount = 46,
+  });
 
   final bool active;
+  final Color? color;
+  final Color? inactiveColor;
+  final int barCount;
 
   @override
   State<_RadioWaveform> createState() => _RadioWaveformState();
@@ -284,7 +292,7 @@ class _RadioWaveformState extends State<_RadioWaveform>
           height: 72,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
-            children: List.generate(46, (index) {
+            children: List.generate(widget.barCount, (index) {
               final wave =
                   math.sin(index * 0.58 + _controller.value * math.pi * 2);
               final alt =
@@ -301,12 +309,16 @@ class _RadioWaveformState extends State<_RadioWaveform>
                     margin: EdgeInsets.symmetric(horizontal: 2),
                     height: height,
                     decoration: BoxDecoration(
-                      color: AppColors.primaryBtn.withValues(alpha: opacity),
+                      color: (widget.active
+                              ? widget.color ?? AppColors.primaryBtn
+                              : widget.inactiveColor ??
+                                  (widget.color ?? AppColors.primaryBtn))
+                          .withValues(alpha: opacity),
                       borderRadius: BorderRadius.circular(999),
                       boxShadow: widget.active
                           ? [
                               BoxShadow(
-                                color: AppColors.primaryBtn
+                                color: (widget.color ?? AppColors.primaryBtn)
                                     .withValues(alpha: 0.32),
                                 blurRadius: 10,
                               ),

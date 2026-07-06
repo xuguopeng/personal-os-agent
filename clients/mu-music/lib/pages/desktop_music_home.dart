@@ -796,408 +796,384 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   }
 
   Widget _buildClaudioRadioWorkspace() {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(34, 38, 22, 0),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 7,
-            child: Column(
+    return _ClaudioParticleField(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(28, 30, 22, 0),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 980;
+            return Row(
               children: [
-                _buildReferenceToolbar(),
-                SizedBox(height: 24),
-                Expanded(child: _buildClaudioRadioCard()),
-              ],
-            ),
-          ),
-          SizedBox(width: 20),
-          SizedBox(
-            width: 380,
-            child: Column(
-              children: [
-                Expanded(child: _buildRadioChatPanel()),
-                SizedBox(height: 12),
-                SizedBox(height: 210, child: _buildRadioMemoryPanel()),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildClaudioRadioCard() {
-    final latest = _radioEpisodes.isNotEmpty ? _radioEpisodes.first : null;
-    final title = latest?['title']?.toString() ?? '沐音私人 AI DJ';
-    final summary = latest?['summary']?.toString() ??
-        '根据西安天气、最近听歌记录和你的临时指令，生成一段像朋友在旁边放歌的私人电台。';
-    final scriptPlan = _radioScriptPlan(latest);
-    final intro = scriptPlan['intro']?.toString() ?? summary;
-    final tracks = _radioEpisodeTracks(latest);
-    final live = _globalPlayerStore.currentTrack?['source'] == 'radio_episode';
-    return _ReferencePanel(
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Column(
-          children: [
-            Container(
-              height: 238,
-              padding: EdgeInsets.fromLTRB(28, 24, 28, 22),
-              decoration: BoxDecoration(
-                color: Color(0xFF08090D),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF08090D),
-                    Color(0xFF151015),
-                    Color(0xFF0A0B10),
-                  ],
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+                Expanded(
+                  child: Column(
                     children: [
+                      _buildReferenceToolbar(),
+                      SizedBox(height: 18),
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '沐音 FM',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 32,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0,
-                              ),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: 460,
+                              maxHeight:
+                                  math.max(620.0, constraints.maxHeight - 74),
                             ),
-                            SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Container(
-                                  width: 7,
-                                  height: 7,
-                                  decoration: BoxDecoration(
-                                    color: live
-                                        ? Color(0xFF29FFB8)
-                                        : AppColors.primaryBtn,
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: (live
-                                                ? Color(0xFF29FFB8)
-                                                : AppColors.primaryBtn)
-                                            .withValues(alpha: 0.6),
-                                        blurRadius: 10,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                SizedBox(width: 8),
-                                Text(
-                                  live ? 'LIVE · 正在播放私人电台' : 'READY · 私人 DJ 待命',
-                                  style: TextStyle(
-                                    color: live
-                                        ? Color(0xFF29FFB8)
-                                        : Colors.white70,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      Text(
-                        _clockLabel(),
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.82),
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
+                            child: _buildClaudioPhoneCard(),
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  Spacer(),
-                  _RadioWaveform(active: live),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Container(
-                color: AppColors.navigationBg
-                    .withValues(alpha: AppColors.isDark ? 0.88 : 0.96),
-                padding: EdgeInsets.fromLTRB(28, 22, 28, 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                ),
+                if (!compact) ...[
+                  SizedBox(width: 22),
+                  SizedBox(
+                    width: 380,
+                    child: Column(
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: AppColors.primaryText,
-                                  fontSize: 23,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                summary,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: AppColors.secondaryText,
-                                  fontSize: 13,
-                                  height: 1.45,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(width: 16),
-                        _ReferencePrimaryButton(
-                          icon: live ? Icons.pause : Icons.play_arrow,
-                          label: latest == null ? '生成电台' : '播放电台',
-                          onTap: _dailyRadioGenerating
-                              ? null
-                              : latest == null
-                                  ? _runDailyRadioNow
-                                  : () => _playRadioEpisode(latest),
-                        ),
-                        SizedBox(width: 10),
-                        _ReferenceGhostButton(
-                          icon: Icons.auto_awesome,
-                          label: _dailyRadioGenerating ? '生成中' : '今日电台',
-                          onTap:
-                              _dailyRadioGenerating ? null : _runDailyRadioNow,
-                        ),
+                        Expanded(child: _buildRadioChatPanel()),
+                        SizedBox(height: 12),
+                        SizedBox(height: 210, child: _buildRadioMemoryPanel()),
                       ],
                     ),
-                    SizedBox(height: 22),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            flex: 6,
-                            child: _buildRadioTranscript(intro),
-                          ),
-                          SizedBox(width: 18),
-                          Expanded(
-                            flex: 4,
-                            child: _buildRadioPlanTracks(tracks),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(height: 16),
-                    _buildRadioEpisodeStrip(),
-                  ],
-                ),
-              ),
-            ),
-          ],
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       ),
     );
   }
 
-  Widget _buildRadioTranscript(String intro) {
+  Widget _buildClaudioPhoneCard() {
+    final latest = _radioEpisodes.isNotEmpty ? _radioEpisodes.first : null;
+    final title = latest?['title']?.toString() ?? 'Monday Night\nExhale';
+    final scriptPlan = _radioScriptPlan(latest);
+    final intro = scriptPlan['intro']?.toString() ??
+        'This is Muo FM. Tell me what tonight should feel like, and I will shape the station around your taste.';
+    final tracks = _radioEpisodeTracks(latest);
+    final firstTrack = tracks.isNotEmpty ? tracks.first : null;
+    final firstTrackTitle = firstTrack?['title']?.toString() ?? '未知歌曲';
+    final firstTrackArtist = firstTrack?['artist']?.toString() ?? '未知歌手';
+    final subtitle = firstTrack == null
+        ? '私人 AI DJ · NAS Radio'
+        : '$firstTrackTitle — $firstTrackArtist';
+    final live = _globalPlayerStore.currentTrack?['source'] == 'radio_episode';
     return Container(
-      padding: EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: AppColors.isDark ? 0.20 : 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'DJ 开场',
-            style: TextStyle(
-              color: AppColors.primaryText,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-            ),
+        borderRadius: BorderRadius.circular(34),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.52),
+            blurRadius: 60,
+            offset: Offset(0, 24),
           ),
-          SizedBox(height: 12),
-          Expanded(
-            child: SingleChildScrollView(
-              child: Text(
-                intro,
-                style: TextStyle(
-                  color: AppColors.primaryText.withValues(alpha: 0.84),
-                  fontSize: 15,
-                  height: 1.72,
+          BoxShadow(
+            color: AppColors.primaryBtn.withValues(alpha: 0.22),
+            blurRadius: 90,
+            spreadRadius: 4,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(34),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Color(0xFFF5F4F0),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                height: 210,
+                padding: EdgeInsets.fromLTRB(28, 24, 28, 0),
+                decoration: BoxDecoration(
+                  color: Color(0xFF090A0D),
                 ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRadioPlanTracks(List<Map<String, dynamic>> tracks) {
-    return Container(
-      padding: EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: AppColors.isDark ? 0.20 : 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '本期歌单',
-            style: TextStyle(
-              color: AppColors.primaryText,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          SizedBox(height: 12),
-          Expanded(
-            child: tracks.isEmpty
-                ? Center(
-                    child: Text(
-                      '生成后会显示歌曲和推荐理由',
-                      style: TextStyle(color: AppColors.secondaryText),
-                    ),
-                  )
-                : ListView.separated(
-                    itemCount: tracks.length,
-                    separatorBuilder: (_, __) =>
-                        Divider(color: AppColors.borderColor, height: 18),
-                    itemBuilder: (context, index) {
-                      final track = tracks[index];
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${index + 1}'.padLeft(2, '0'),
-                            style: TextStyle(
-                              color: AppColors.primaryBtn,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  track['title']?.toString() ?? '未知歌曲',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: AppColors.primaryText,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                SizedBox(height: 4),
-                                Text(
-                                  track['artist']?.toString() ?? '未知歌手',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: AppColors.secondaryText,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRadioEpisodeStrip() {
-    final episodes = _radioEpisodes.take(4).toList();
-    return SizedBox(
-      height: 78,
-      child: episodes.isEmpty
-          ? Center(
-              child: Text(
-                '还没有生成过电台。你可以直接在右侧告诉私人 DJ 今天想听什么。',
-                style: TextStyle(color: AppColors.secondaryText, fontSize: 13),
-              ),
-            )
-          : ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: episodes.length,
-              separatorBuilder: (_, __) => SizedBox(width: 12),
-              itemBuilder: (context, index) {
-                final episode = episodes[index];
-                return InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () => _playRadioEpisode(episode),
-                  child: Container(
-                    width: 230,
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.black
-                          .withValues(alpha: AppColors.isDark ? 0.22 : 0.04),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.borderColor),
-                    ),
-                    child: Row(
+                child: Column(
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.radio,
-                            color: AppColors.primaryBtn, size: 25),
+                        Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: AppColors.primaryBtn,
+                          ),
+                          child:
+                              Icon(Icons.radio, color: Colors.white, size: 18),
+                        ),
                         SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Text(
-                                episode['title']?.toString() ?? '私人电台',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                'Muo FM',
                                 style: TextStyle(
-                                  color: AppColors.primaryText,
-                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  fontSize: 30,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.2,
                                 ),
                               ),
-                              SizedBox(height: 4),
-                              Text(
-                                '${episode['durationSeconds'] ?? 0}s · ${episode['generator'] ?? ''}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: AppColors.secondaryText,
-                                  fontSize: 11,
-                                ),
+                              SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: BoxDecoration(
+                                      color: Color(0xFF29FFB8),
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Color(0xFF29FFB8)
+                                              .withValues(alpha: 0.72),
+                                          blurRadius: 10,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  SizedBox(width: 7),
+                                  Text(
+                                    live ? 'Speaking...' : 'Ready...',
+                                    style: TextStyle(
+                                      color: Color(0xFF29FFB8),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
                         ),
+                        Text(
+                          _clockLabel(),
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.82),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Spacer(),
+                    _RadioWaveform(
+                      active: true,
+                      color: Colors.white,
+                      inactiveColor: Colors.white,
+                      barCount: 54,
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Transform.translate(
+                  offset: Offset(0, -28),
+                  child: Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.fromLTRB(28, 30, 28, 0),
+                    decoration: BoxDecoration(
+                      color: Color(0xFFF7F6F1),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(30),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Color(0xFF111111),
+                            fontSize: 34,
+                            height: 0.98,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Color(0xFF707070),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        SizedBox(height: 20),
+                        _buildClaudioPhoneProgress(latest),
+                        SizedBox(height: 18),
+                        Expanded(child: _buildClaudioPhoneTranscript(intro)),
+                        SizedBox(height: 16),
+                        _buildClaudioPhoneBottomBar(latest, live),
+                        SizedBox(height: 18),
                       ],
                     ),
                   ),
-                );
-              },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClaudioPhoneProgress(Map<String, dynamic>? episode) {
+    final duration = episode?['durationSeconds'];
+    final durationText = duration is int && duration > 0
+        ? '${(duration ~/ 60).toString().padLeft(2, '0')}:${(duration % 60).toString().padLeft(2, '0')}'
+        : '03:27';
+    return Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: Color(0xFF111111),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(Icons.pause, color: Colors.white, size: 17),
+        ),
+        SizedBox(width: 13),
+        Expanded(
+          child: Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              Container(
+                height: 3,
+                decoration: BoxDecoration(
+                  color: Color(0xFFD8D6D2),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              FractionallySizedBox(
+                widthFactor: 0.43,
+                child: Container(
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: Color(0xFF111111),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(width: 12),
+        Text(
+          '0:48 / $durationText',
+          style: TextStyle(
+            color: Color(0xFF7D7B76),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildClaudioPhoneTranscript(String intro) {
+    final sentences = _splitRadioTranscript(intro);
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(18, 16, 18, 10),
+      decoration: BoxDecoration(
+        color: Color(0xFFEDEBE5),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: ListView.builder(
+        padding: EdgeInsets.zero,
+        itemCount: math.max(1, sentences.length),
+        itemBuilder: (context, index) {
+          final text = sentences.isEmpty ? intro : sentences[index];
+          final active = index == 0;
+          return Padding(
+            padding: EdgeInsets.only(bottom: 15),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Muo FM · 0:${(index * 4).toString().padLeft(2, '0')}',
+                  style: TextStyle(
+                    color: Color(0xFF8F8D87),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 5),
+                Text(
+                  text,
+                  style: TextStyle(
+                    color: active ? Color(0xFF111111) : Color(0xFFB6B2AA),
+                    fontSize: 16,
+                    height: 1.35,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildClaudioPhoneBottomBar(
+    Map<String, dynamic>? latest,
+    bool live,
+  ) {
+    return Row(
+      children: [
+        Text(
+          live ? 'LIVE' : '0:03',
+          style: TextStyle(
+            color: Color(0xFF111111),
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        SizedBox(width: 14),
+        Expanded(
+          child: SizedBox(
+            height: 34,
+            child: _RadioWaveform(
+              active: true,
+              color: Color(0xFF111111),
+              inactiveColor: Color(0xFFC9C6BE),
+              barCount: 42,
+            ),
+          ),
+        ),
+        SizedBox(width: 16),
+        InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: latest == null
+              ? _runDailyRadioNow
+              : () => _playRadioEpisode(latest),
+          child: Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: Color(0xFF111111),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              latest == null ? Icons.auto_awesome : Icons.pause,
+              color: Colors.white,
+              size: 24,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2542,6 +2518,26 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
           .toList();
     }
     return [];
+  }
+
+  List<String> _splitRadioTranscript(String text) {
+    final cleaned = text.trim();
+    if (cleaned.isEmpty) return [];
+    final parts = cleaned
+        .split(RegExp(r'(?<=[。！？.!?])\s+|\n+'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    if (parts.length <= 1 && cleaned.length > 42) {
+      final chunks = <String>[];
+      for (var index = 0; index < cleaned.length; index += 42) {
+        chunks.add(
+          cleaned.substring(index, math.min(index + 42, cleaned.length)),
+        );
+      }
+      return chunks;
+    }
+    return parts;
   }
 
   int _trackDurationMilliseconds(Map<String, dynamic> track) {
