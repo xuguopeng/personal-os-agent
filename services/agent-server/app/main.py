@@ -63,7 +63,7 @@ def health() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(
         status="ok",
-        service="personal-os-agent-server",
+        service="mu-music-server",
         database=settings.db_path,
     )
 

@@ -1134,7 +1134,7 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
                     if not already_marked:
                         mark_scan_finished(result)
                     return result
-                if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
+                if should_skip_audio_path(path):
                     continue
                 scanned += 1
                 normalized_path = str(path.resolve())
@@ -1330,12 +1330,13 @@ def denormalized_lookup_value(column: str, normalized: str) -> str:
 
 def read_track_metadata(path: Path, cover_dir: Path) -> dict[str, Any]:
     stat = path.stat()
-    audio = MutagenFile(path) if MutagenFile else None
+    audio = safe_mutagen_file(path)
     tags = getattr(audio, "tags", None)
     duration = int(getattr(getattr(audio, "info", None), "length", 0) or 0)
-    title = first_tag(tags, "title", "TIT2", "\xa9nam") or path.stem
-    artist = first_tag(tags, "artist", "TPE1", "\xa9ART") or "未知歌手"
-    album = first_tag(tags, "album", "TALB", "\xa9alb") or "未知专辑"
+    fallback = fallback_metadata_from_path(path)
+    title = first_tag(tags, "title", "TIT2", "\xa9nam") or fallback["title"]
+    artist = first_tag(tags, "artist", "TPE1", "\xa9ART") or fallback["artist"]
+    album = first_tag(tags, "album", "TALB", "\xa9alb") or fallback["album"]
     album_artist = first_tag(tags, "albumartist", "album_artist", "TPE2", "aART")
     lyrics = first_tag(tags, "lyrics", "USLT::XXX", "\xa9lyr") or read_sidecar_lyrics(path)
     cover_path = extract_cover(path, audio, cover_dir) or copy_sidecar_cover(path, cover_dir)
@@ -1357,6 +1358,49 @@ def read_track_metadata(path: Path, cover_dir: Path) -> dict[str, Any]:
         "file_format": path.suffix.lower().lstrip("."),
         "file_size": stat.st_size,
         "file_mtime": stat.st_mtime,
+    }
+
+
+def should_skip_audio_path(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
+        return True
+    if path.name.startswith("._"):
+        return True
+    if any(part.startswith("._") for part in path.parts):
+        return True
+    return False
+
+
+def safe_mutagen_file(path: Path) -> Any | None:
+    if not MutagenFile:
+        return None
+    try:
+        return MutagenFile(path)
+    except Exception:  # noqa: BLE001 - bad tags should not block local playback
+        return None
+
+
+def fallback_metadata_from_path(path: Path) -> dict[str, str]:
+    title = path.stem.strip() or "未知歌曲"
+    album = path.parent.name.strip() if path.parent.name else "未知专辑"
+    artist = "未知歌手"
+    try:
+        if path.parent.parent and path.parent.parent.name:
+            artist = path.parent.parent.name.strip() or artist
+    except IndexError:
+        pass
+    if " - " in title:
+        left, right = [part.strip() for part in title.split(" - ", 1)]
+        if left and right:
+            title, artist = left, right
+    elif "-" in title:
+        left, right = [part.strip() for part in title.split("-", 1)]
+        if left and right and artist == "未知歌手":
+            artist, title = left, right
+    return {
+        "title": title or "未知歌曲",
+        "artist": artist or "未知歌手",
+        "album": album or "未知专辑",
     }
 
 
