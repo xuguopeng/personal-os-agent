@@ -30,13 +30,22 @@ class HttpUtil {
   }
 
   Map<String, String> get authHeaders {
-    final username = Constants.agentUsername;
-    final password = Constants.agentPassword;
+    final username = ClientConfig.agentUsername;
+    final password = ClientConfig.agentPassword;
     if (username.isEmpty || password.isEmpty) {
       return {};
     }
     final token = base64Encode(utf8.encode('$username:$password'));
     return {'Authorization': 'Basic $token'};
+  }
+
+  Options _optionsWithAuth(Options? options) {
+    final requestOptions = options ?? Options();
+    requestOptions.headers = {
+      ...?requestOptions.headers,
+      ...authHeaders,
+    };
+    return requestOptions;
   }
 
   /// 单例初始
@@ -86,13 +95,12 @@ class HttpUtil {
 
   /// 带重试的请求方法
   Future<T> _retryRequest<T>(
-    Future<T> Function() requestFunc,
-    String methodName,
-  ) async {
+      Future<T> Function() requestFunc, String methodName,
+      {List<String>? baseUrls, bool updateActiveBaseUrl = true}) async {
     Exception? lastException;
 
     for (int attempt = 1; attempt <= _maxRetries; attempt++) {
-      for (final baseUrl in _orderedBaseUrls()) {
+      for (final baseUrl in baseUrls ?? _orderedBaseUrls()) {
         try {
           _dio.options.baseUrl = baseUrl;
           print("🔄 $methodName attempt $attempt/$_maxRetries via $baseUrl");
@@ -107,7 +115,9 @@ class HttpUtil {
           }
 
           final result = await requestFunc();
-          _activeBaseUrl = baseUrl;
+          if (updateActiveBaseUrl) {
+            _activeBaseUrl = baseUrl;
+          }
           print("✅ $methodName succeeded via $baseUrl on attempt $attempt");
           return result;
         } catch (e) {
@@ -159,8 +169,8 @@ class HttpUtil {
 
   List<String> _orderedBaseUrls() {
     final urls = <String>[
-      _activeBaseUrl,
       ...Constants.apiUrls,
+      _activeBaseUrl,
     ];
     final result = <String>[];
     for (final url in urls) {
@@ -169,6 +179,28 @@ class HttpUtil {
       }
     }
     return result;
+  }
+
+  List<String> _orderedRootBaseUrls() {
+    final urls = <String>[
+      ...Constants.rootApiUrls,
+      _rootUrlFor(_activeBaseUrl),
+    ];
+    final result = <String>[];
+    for (final url in urls) {
+      if (url.isNotEmpty && !result.contains(url)) {
+        result.add(url);
+      }
+    }
+    return result;
+  }
+
+  String _rootUrlFor(String baseUrl) {
+    if (baseUrl.endsWith('/v1/music')) {
+      return baseUrl.substring(0, baseUrl.length - '/music'.length);
+    }
+    if (baseUrl.endsWith('/v1')) return baseUrl;
+    return baseUrl;
   }
 
   /// get 请求
@@ -180,7 +212,7 @@ class HttpUtil {
   }) async {
     return await _retryRequest<Response>(
       () async {
-        Options requestOptions = options ?? Options();
+        final requestOptions = _optionsWithAuth(options);
         Response response = await _dio.get(
           url,
           queryParameters: params,
@@ -193,6 +225,30 @@ class HttpUtil {
     );
   }
 
+  /// root-level GET, for endpoints such as /v1/dj/*
+  Future<Response> getRoot(
+    String url, {
+    Map<String, dynamic>? params,
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
+    return await _retryRequest<Response>(
+      () async {
+        final requestOptions = _optionsWithAuth(options);
+        final response = await _dio.get(
+          url,
+          queryParameters: params,
+          options: requestOptions,
+          cancelToken: cancelToken,
+        );
+        return response;
+      },
+      'GET root $url',
+      baseUrls: _orderedRootBaseUrls(),
+      updateActiveBaseUrl: false,
+    );
+  }
+
   /// post 请求
   Future<Response> post(
     String url, {
@@ -202,7 +258,7 @@ class HttpUtil {
   }) async {
     return await _retryRequest<Response>(
       () async {
-        var requestOptions = options ?? Options();
+        final requestOptions = _optionsWithAuth(options);
         Response response = await _dio.post(
           url,
           data: data ?? {},
@@ -215,6 +271,30 @@ class HttpUtil {
     );
   }
 
+  /// root-level POST, for endpoints such as /v1/dj/*
+  Future<Response> postRoot(
+    String url, {
+    dynamic data,
+    Options? options,
+    CancelToken? cancelToken,
+  }) async {
+    return await _retryRequest<Response>(
+      () async {
+        final requestOptions = _optionsWithAuth(options);
+        final response = await _dio.post(
+          url,
+          data: data ?? {},
+          options: requestOptions,
+          cancelToken: cancelToken,
+        );
+        return response;
+      },
+      'POST root $url',
+      baseUrls: _orderedRootBaseUrls(),
+      updateActiveBaseUrl: false,
+    );
+  }
+
   /// put 请求
   Future<Response> put(
     String url, {
@@ -222,7 +302,7 @@ class HttpUtil {
     Options? options,
     CancelToken? cancelToken,
   }) async {
-    var requestOptions = options ?? Options();
+    final requestOptions = _optionsWithAuth(options);
     Response response = await _dio.put(
       url,
       data: data ?? {},
@@ -239,7 +319,7 @@ class HttpUtil {
     Options? options,
     CancelToken? cancelToken,
   }) async {
-    var requestOptions = options ?? Options();
+    final requestOptions = _optionsWithAuth(options);
     Response response = await _dio.delete(
       url,
       data: data ?? {},

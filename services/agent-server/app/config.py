@@ -32,6 +32,14 @@ class Settings(BaseModel):
     music_library_roots: str
     music_cover_dir: str
     radio_output_dir: str
+    llm_provider: str
+    openai_compat_base_url: str
+    openai_compat_api_key: str
+    openai_compat_model: str
+    tts_provider: str
+    fish_api_key: str
+    fish_tts_model: str
+    fish_tts_reference_id: str
     minimax_subscription_key: str
     minimax_api_key: str
     minimax_group_id: str
@@ -45,6 +53,14 @@ class Settings(BaseModel):
     radio_weather_lat: float
     radio_weather_lon: float
     radio_recent_limit: int
+    radio_mix_crossfade_seconds: float
+    radio_mix_ducking_volume: float
+    radio_mix_music_volume: float
+    missing_download_enabled: bool
+    missing_download_start_hour: int
+    missing_download_end_hour: int
+    missing_download_interval_hours: int
+    missing_download_batch_size: int
     listening_plugin_dirs: str
     metadata_plugin_dirs: str
     sqmusic_base_url: str
@@ -83,19 +99,35 @@ def get_settings() -> Settings:
         music_library_roots=value("MUSIC_LIBRARY_ROOTS", value("DAOLIYU_MEDIA_ROOT", "/data/media")),
         music_cover_dir=value("MUSIC_COVER_DIR", "/data/covers"),
         radio_output_dir=value("RADIO_OUTPUT_DIR", "/data/radio"),
+        llm_provider=value("LLM_PROVIDER", "0029").lower(),
+        openai_compat_base_url=value("OPENAI_COMPAT_BASE_URL", "https://api.0029.org/v1").rstrip("/"),
+        openai_compat_api_key=value("OPENAI_COMPAT_API_KEY", ""),
+        openai_compat_model=value("OPENAI_COMPAT_MODEL", "gpt-5.5"),
+        tts_provider=value("TTS_PROVIDER", "fish").lower(),
+        fish_api_key=value("FISH_API_KEY", ""),
+        fish_tts_model=value("FISH_TTS_MODEL", "s2.1-pro-free"),
+        fish_tts_reference_id=value("FISH_TTS_REFERENCE_ID", "c43ae8e1c3664eac9203f9293fabc3c9"),
         minimax_subscription_key=value("MINIMAX_SUBSCRIPTION_KEY", ""),
         minimax_api_key=value("MINIMAX_API_KEY", ""),
         minimax_group_id=value("MINIMAX_GROUP_ID", ""),
-        minimax_chat_model=value("MINIMAX_CHAT_MODEL", "MiniMax-M3"),
-        minimax_tts_voice_id=value("MINIMAX_TTS_VOICE_ID", "male-qn-jingying"),
-        minimax_tts_model=value("MINIMAX_TTS_MODEL", "speech-2.8-hd"),
+        minimax_chat_model=value("MINIMAX_CHAT_MODEL", ""),
+        minimax_tts_voice_id=value("MINIMAX_TTS_VOICE_ID", ""),
+        minimax_tts_model=value("MINIMAX_TTS_MODEL", ""),
         radio_daily_enabled=parse_bool(value("RADIO_DAILY_ENABLED", "true")),
-        radio_daily_time=value("RADIO_DAILY_TIME", "07:30"),
+        radio_daily_time=value("RADIO_DAILY_TIME", "07:00"),
         radio_daily_timezone=value("RADIO_DAILY_TIMEZONE", "Asia/Shanghai"),
         radio_weather_city=value("RADIO_WEATHER_CITY", "陕西西安"),
         radio_weather_lat=float(value("RADIO_WEATHER_LAT", "34.3416")),
         radio_weather_lon=float(value("RADIO_WEATHER_LON", "108.9398")),
         radio_recent_limit=int(value("RADIO_RECENT_LIMIT", "30")),
+        radio_mix_crossfade_seconds=float(value("RADIO_MIX_CROSSFADE_SECONDS", "2.5")),
+        radio_mix_ducking_volume=float(value("RADIO_MIX_DUCKING_VOLUME", "0.18")),
+        radio_mix_music_volume=float(value("RADIO_MIX_MUSIC_VOLUME", "0.92")),
+        missing_download_enabled=parse_bool(value("MISSING_DOWNLOAD_ENABLED", "true")),
+        missing_download_start_hour=int(value("MISSING_DOWNLOAD_START_HOUR", "7")),
+        missing_download_end_hour=int(value("MISSING_DOWNLOAD_END_HOUR", "20")),
+        missing_download_interval_hours=int(value("MISSING_DOWNLOAD_INTERVAL_HOURS", "2")),
+        missing_download_batch_size=int(value("MISSING_DOWNLOAD_BATCH_SIZE", "20")),
         listening_plugin_dirs=value(
             "LISTENING_PLUGIN_DIRS",
             "/data/private_plugins/music_sources,./services/agent-server/private_plugins,./private_plugins",

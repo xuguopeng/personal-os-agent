@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart';
 import 'package:mu_music/common/index.dart';
 
 class NasMusicApi {
@@ -7,11 +8,6 @@ class NasMusicApi {
 
   static Future<Map<String, dynamic>> getStatus() async {
     final response = await HttpUtil().get('/status');
-    return Map<String, dynamic>.from(response.data as Map);
-  }
-
-  static Future<Map<String, dynamic>> login() async {
-    final response = await HttpUtil().post('/auth/login');
     return Map<String, dynamic>.from(response.data as Map);
   }
 
@@ -25,6 +21,7 @@ class NasMusicApi {
       params: {
         'limit': limit,
         'offset': offset,
+        if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
       },
     );
     final items = _extractList(response.data);
@@ -38,6 +35,9 @@ class NasMusicApi {
             ? (track['ar'] as List).first['name']
             : '',
         track['al']?['name'],
+        track['fileName'],
+        track['filePath'],
+        track['sourcePath'],
       ].join(' ').toLowerCase();
       return haystack.contains(trimmedKeyword);
     }).toList();
@@ -77,7 +77,7 @@ class NasMusicApi {
         data: {'trackId': trackId},
       );
     } catch (error) {
-      debugPrint('Daoliyu 播放状态同步失败: $error');
+      debugPrint('NAS 播放状态同步失败: $error');
     }
   }
 
@@ -85,53 +85,94 @@ class NasMusicApi {
     try {
       await HttpUtil().post('${Constants.musicApiPath}/player/pause');
     } catch (error) {
-      debugPrint('Daoliyu 暂停状态同步失败: $error');
+      debugPrint('NAS 暂停状态同步失败: $error');
     }
   }
 
-  static Future<Map<String, dynamic>> getRadioStatus() async {
-    final response = await HttpUtil().get('/radio/status');
-    return Map<String, dynamic>.from(response.data as Map);
+  static Future<List<Map<String, dynamic>>> listFavoriteTracks() async {
+    final response =
+        await HttpUtil().get('${Constants.musicApiPath}/favorites/tracks');
+    final items = _extractList(response.data);
+    return items.map((item) => normalizeTrack(item)).toList();
   }
 
-  static Future<Map<String, dynamic>> getDailyRadioStatus() async {
-    final response = await HttpUtil().get('/radio/daily/status');
-    return Map<String, dynamic>.from(response.data as Map);
-  }
-
-  static Future<Map<String, dynamic>> runDailyRadioNow() async {
-    final response = await HttpUtil().post('/radio/daily/run');
-    return Map<String, dynamic>.from(response.data as Map);
-  }
-
-  static Future<Map<String, dynamic>> buildDailyRadioMix({
-    int trackCount = 3,
+  static Future<Map<String, dynamic>> setFavoriteTrack({
+    required String trackId,
+    required bool liked,
   }) async {
-    final response = await HttpUtil().post(
-      '/radio/daily/build',
-      data: {'trackCount': trackCount},
+    if (liked) {
+      final response = await HttpUtil().put(
+        '${Constants.musicApiPath}/favorites/tracks/$trackId',
+      );
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    final response = await HttpUtil().delete(
+      '${Constants.musicApiPath}/favorites/tracks/$trackId',
     );
     return Map<String, dynamic>.from(response.data as Map);
   }
 
-  static Future<List<Map<String, dynamic>>> listRadioEpisodes() async {
-    final response = await HttpUtil().get('/radio/episodes');
-    final items = _extractList(response.data);
-    return items
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
+  static Future<Map<String, dynamic>> getDjStatus() async {
+    final response = await HttpUtil().getRoot('/dj/status');
+    return Map<String, dynamic>.from(response.data as Map);
   }
 
-  static Future<Map<String, dynamic>> getRadioChat() async {
-    final response = await HttpUtil().get('/radio/chat');
+  static Future<Map<String, dynamic>> getDjChat() async {
+    final response = await HttpUtil().getRoot('/dj/chat');
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> getDjToday({
+    bool autoBuild = false,
+  }) async {
+    final response = await HttpUtil().getRoot(
+      '/dj/today',
+      params: {'autoBuild': autoBuild},
+      options: Options(
+        receiveTimeout: Duration(seconds: autoBuild ? 600 : 30),
+        sendTimeout: Duration(seconds: 20),
+      ),
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> probeDjTts() async {
+    final response = await HttpUtil().postRoot(
+      '/dj/tts/probe',
+      options: Options(
+        receiveTimeout: Duration(seconds: 300),
+        sendTimeout: Duration(seconds: 20),
+      ),
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> buildDjEpisode({
+    bool force = false,
+    String message = '生成今天的真人口播电台',
+  }) async {
+    final response = await HttpUtil().postRoot(
+      '/dj/episode/build',
+      data: {
+        'force': force,
+        'message': message,
+      },
+      options: Options(
+        receiveTimeout: Duration(seconds: 650),
+        sendTimeout: Duration(seconds: 20),
+      ),
+    );
     return Map<String, dynamic>.from(response.data as Map);
   }
 
   static Future<Map<String, dynamic>> sendRadioChat(String content) async {
-    final response = await HttpUtil().post(
-      '/radio/chat',
+    final response = await HttpUtil().postRoot(
+      '/dj/chat',
       data: {'content': content},
+      options: Options(
+        receiveTimeout: Duration(seconds: 120),
+        sendTimeout: Duration(seconds: 20),
+      ),
     );
     return Map<String, dynamic>.from(response.data as Map);
   }
@@ -141,21 +182,8 @@ class NasMusicApi {
     required bool remember,
   }) async {
     final action = remember ? 'remember' : 'ignore';
-    final response = await HttpUtil().post('/radio/memories/$memoryId/$action');
-    return Map<String, dynamic>.from(response.data as Map);
-  }
-
-  static Future<Map<String, dynamic>> createRadioJob({
-    required List<String> trackIds,
-    String title = '今日 NAS 音乐电台',
-  }) async {
-    final response = await HttpUtil().post(
-      '/radio/jobs',
-      data: {
-        'title': title,
-        'trackIds': trackIds,
-      },
-    );
+    final response =
+        await HttpUtil().postRoot('/dj/memories/$memoryId/$action');
     return Map<String, dynamic>.from(response.data as Map);
   }
 
@@ -186,7 +214,7 @@ class NasMusicApi {
 
   static Future<Map<String, dynamic>> getSqmusicStatus() async {
     final response = await HttpUtil()
-        .get('${Constants.musicApiPath}/download/sqmusic/status');
+        .get('${Constants.musicApiPath}/api/download/sqmusic/status');
     return Map<String, dynamic>.from(response.data as Map);
   }
 
@@ -196,7 +224,7 @@ class NasMusicApi {
     int pageSize = 20,
   }) async {
     final response = await HttpUtil().get(
-      '${Constants.musicApiPath}/download/sqmusic/search',
+      '${Constants.musicApiPath}/api/download/sqmusic/search',
       params: {
         'keyword': keyword,
         'plugName': plugName,
@@ -214,7 +242,7 @@ class NasMusicApi {
     Map<String, dynamic> track,
   ) async {
     final response = await HttpUtil().post(
-      '${Constants.musicApiPath}/download/sqmusic/song',
+      '${Constants.musicApiPath}/api/download/sqmusic/song',
       data: {
         'track': track,
         'autoSelectBrType': true,
@@ -225,10 +253,27 @@ class NasMusicApi {
 
   static Future<Map<String, dynamic>> rescanSqmusicDownloads() async {
     final response = await HttpUtil().post(
-      '${Constants.musicApiPath}/download/sqmusic/rescan',
+      '${Constants.musicApiPath}/api/download/sqmusic/rescan',
       data: {
         'incremental': true,
         'scrapeMissingWithQqMusic': true,
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  static Future<Map<String, dynamic>> refreshTrackMetadata(
+      String trackId) async {
+    final response = await HttpUtil().post(
+      '${Constants.musicApiPath}/admin/metadata/scrape/jobs',
+      data: {
+        'providers': ['qqmusic'],
+        'missing': ['lyrics', 'cover'],
+        'trackIds': [trackId],
+        'limit': 10,
+        'candidateLimit': 3,
+        'autoApply': true,
+        'minConfidence': 0.92,
       },
     );
     return Map<String, dynamic>.from(response.data as Map);
@@ -270,109 +315,60 @@ class NasMusicApi {
 
   static List<Map<String, dynamic>> normalizeRadioEpisodePlaylist(
       Map<String, dynamic> raw) {
-    final rawSegments = raw['segments'];
+    final rawFlow = raw['playbackFlow'];
+    final rawSegments =
+        rawFlow is List && rawFlow.isNotEmpty ? rawFlow : raw['segments'];
     if (rawSegments is! List || rawSegments.isEmpty) {
-      return _normalizeLegacyRadioEpisodePlaylist(raw);
+      return <Map<String, dynamic>>[];
     }
-    final hasFullMix = rawSegments.any((item) =>
-        item is Map && item['type']?.toString().toLowerCase() == 'full_mix');
-    if (hasFullMix) {
-      return [normalizeRadioEpisode(raw)];
-    }
-
     final episodeId = raw['id']?.toString() ?? '';
     final tracks = <Map<String, dynamic>>[];
+    Map<String, dynamic>? pendingSpoken;
     for (final item in rawSegments) {
       if (item is! Map) continue;
       final segment = Map<String, dynamic>.from(item);
       final type = segment['type']?.toString() ?? '';
+      if (type.toLowerCase() == 'full_mix') continue;
       if (type == 'track') {
         final trackId = segment['id']?.toString() ?? '';
         if (trackId.isEmpty) continue;
-        tracks.add(
-          normalizeTrack({
-            'id': trackId,
-            'title': segment['title']?.toString() ?? '未知歌曲',
-            'albumArtist': segment['artist']?.toString() ?? '未知歌手',
-            'album': {
-              'id': segment['album']?.toString() ?? '',
-              'title': segment['album']?.toString() ?? '今日电台推荐',
-            },
-            'durationSeconds': _asInt(segment['durationSeconds']),
-          }),
-        );
+        final normalized = normalizeTrack({
+          ...segment,
+          'id': trackId,
+          'title': segment['title']?.toString() ?? '未知歌曲',
+          'albumArtist': segment['artist']?.toString() ?? '未知歌手',
+          'album': {
+            'id': segment['album']?.toString() ?? '',
+            'title': segment['album']?.toString() ?? '今日电台推荐',
+          },
+          'durationSeconds': _asInt(segment['durationSeconds']),
+        });
+        tracks.add({
+          ...normalized,
+          'radioEpisodeId': episodeId,
+          'radioFlowType': 'track',
+          'radioStage': segment['stage']?.toString() ?? '',
+          'radioStageName': segment['stageName']?.toString() ?? '',
+          'radioReason': segment['reason']?.toString() ?? '',
+          if (pendingSpoken != null) ...{
+            'radioSpokenStreamUrl':
+                pendingSpoken['streamUrl']?.toString() ?? '',
+            'radioSpokenText': pendingSpoken['text']?.toString() ?? '',
+            'radioSpokenTitle': pendingSpoken['title']?.toString() ?? '',
+          },
+          'lyrics': segment['lyrics']?.toString().trim().isNotEmpty == true
+              ? segment['lyrics'].toString()
+              : segment['reason']?.toString() ?? '',
+        });
+        pendingSpoken = null;
         continue;
       }
 
-      final streamUrl = segment['streamUrl']?.toString();
-      final fallbackUrl = type == 'outro'
-          ? radioEpisodeOutroStreamUrl(episodeId)
-          : radioEpisodeStreamUrl(episodeId);
-      final title = segment['title']?.toString() ??
-          (type == 'outro' ? '今日电台收尾' : '今日电台开场');
-      tracks.add({
-        'id': segment['id']?.toString() ?? 'radio_${episodeId}_$type',
-        'radioEpisodeId': episodeId,
-        'source': 'radio_episode',
-        'name': title,
-        'ar': [
-          {
-            'id': 'nas-radio',
-            'name': segment['artist']?.toString() ?? 'NAS 音乐电台',
-          }
-        ],
-        'al': {
-          'id': 'nas-radio',
-          'name': '私人电台',
-          'picUrl': '',
-        },
-        'dt': _asInt(segment['durationSeconds']) * 1000,
-        'url': resolveServerUrl(
-            streamUrl?.isNotEmpty == true ? streamUrl : fallbackUrl),
-        'lyrics': _radioSegmentLyrics(raw, type),
-        'fileFormat': segment['audioFormat']?.toString() ??
-            raw['audioFormat']?.toString(),
-        'summary': raw['summary']?.toString() ?? '',
-      });
+      pendingSpoken = segment;
     }
 
-    return tracks.isEmpty ? [normalizeRadioEpisode(raw)] : tracks;
-  }
-
-  static List<Map<String, dynamic>> _normalizeLegacyRadioEpisodePlaylist(
-      Map<String, dynamic> raw) {
-    final intro = normalizeRadioEpisode(raw);
-    intro['name'] = '${raw['title']?.toString() ?? '今日电台'} 串词';
-    intro['radioSegmentType'] = 'intro';
-
-    final sourceTrackIds = _radioSourceTrackIds(raw);
-    if (sourceTrackIds.isEmpty) return [intro];
-
-    final tracks = <Map<String, dynamic>>[intro];
-    for (var index = 0; index < sourceTrackIds.length; index++) {
-      final trackId = sourceTrackIds[index];
-      tracks.add(
-        normalizeTrack({
-          'id': trackId,
-          'title': '第 ${index + 1} 首推荐歌曲',
-          'albumArtist': 'NAS 曲库',
-          'album': {
-            'id': 'radio-recommendation',
-            'title': '电台推荐歌曲',
-          },
-        }),
-      );
-    }
+    if (tracks.isEmpty) return [normalizeRadioEpisode(raw)];
     return tracks;
-  }
-
-  static List<String> _radioSourceTrackIds(Map<String, dynamic> raw) {
-    final rawIds = raw['sourceTrackIds'] ?? raw['source_track_ids'];
-    if (rawIds is! List) return <String>[];
-    return rawIds
-        .map((item) => item?.toString().trim() ?? '')
-        .where((id) => id.isNotEmpty && !id.startsWith('radio_'))
-        .toList();
   }
 
   static String streamUrl(String trackId) {
@@ -385,7 +381,7 @@ class NasMusicApi {
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return value;
     }
-    if (value.startsWith('/v1/music/')) {
+    if (value.startsWith('/v1/music/') || value.startsWith('/v1/dj/')) {
       return '${_rootServerUrl()}$value';
     }
     if (value.startsWith('/static/')) {
@@ -409,7 +405,7 @@ class NasMusicApi {
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return value;
     }
-    if (value.startsWith('/v1/music/')) {
+    if (value.startsWith('/v1/music/') || value.startsWith('/v1/dj/')) {
       return '${_rootServerUrl()}$value';
     }
     if (value.startsWith('/')) {
@@ -431,6 +427,7 @@ class NasMusicApi {
     final albumTitle =
         album['title']?.toString() ?? raw['albumTitle']?.toString() ?? '未知专辑';
     final durationSeconds = _asInt(raw['durationSeconds']);
+    final rawStreamUrl = raw['streamUrl']?.toString() ?? '';
 
     return {
       ...raw,
@@ -448,7 +445,9 @@ class NasMusicApi {
         'picUrl': coverUrl,
       },
       'dt': durationSeconds > 0 ? durationSeconds * 1000 : _asInt(raw['dt']),
-      'url': streamUrl(raw['id']?.toString() ?? ''),
+      'url': rawStreamUrl.isNotEmpty
+          ? resolveServerUrl(rawStreamUrl)
+          : NasMusicApi.streamUrl(raw['id']?.toString() ?? ''),
       'lyrics': raw['lyrics']?.toString() ?? '',
     };
   }
@@ -529,15 +528,6 @@ class NasMusicApi {
     final album = track['al'];
     if (album is Map) return album['picUrl']?.toString() ?? '';
     return '';
-  }
-
-  static String _radioSegmentLyrics(Map<String, dynamic> raw, String type) {
-    final script = raw['script']?.toString() ?? '';
-    if (type != 'outro') return script;
-    final marker = '--- 收尾 ---';
-    final markerIndex = script.indexOf(marker);
-    if (markerIndex < 0) return script;
-    return script.substring(markerIndex + marker.length).trim();
   }
 
   static String _rootServerUrl() {

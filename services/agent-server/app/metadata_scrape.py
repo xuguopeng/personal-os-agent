@@ -47,11 +47,13 @@ class ScrapeApplyRequest(BaseModel):
 class ScrapeJobCreateRequest(BaseModel):
     providers: list[str] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
+    trackIds: list[str] = Field(default_factory=list)
     limit: int = Field(default=50, ge=1, le=1000)
     candidateLimit: int = Field(default=3, ge=1, le=10)
     autoApply: bool = False
     minConfidence: float = Field(default=0.92, ge=0, le=1)
     applyFields: list[str] = Field(default_factory=list)
+    scanAfterComplete: bool = False
 
 
 class ScrapeJobApplyRequest(BaseModel):
@@ -152,10 +154,11 @@ def create_scrape_job(request: ScrapeJobCreateRequest) -> dict[str, Any]:
             INSERT INTO music_metadata_scrape_jobs (
                 id, status, mode, providers_json, missing_json, apply_fields_json,
                 limit_count, candidate_limit, auto_apply, min_confidence
-            ) VALUES (?, 'pending', 'missing', ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
+                f"track_ids:{','.join(request.trackIds)}" if request.trackIds else "missing",
                 json.dumps(request.providers, ensure_ascii=False),
                 json.dumps(filters, ensure_ascii=False),
                 json.dumps(request.applyFields, ensure_ascii=False),
@@ -165,7 +168,11 @@ def create_scrape_job(request: ScrapeJobCreateRequest) -> dict[str, Any]:
                 request.minConfidence,
             ),
         )
-    thread = threading.Thread(target=run_scrape_job_thread, args=(job_id,), daemon=True)
+    thread = threading.Thread(
+        target=run_scrape_job_thread,
+        args=(job_id, request.scanAfterComplete),
+        daemon=True,
+    )
     thread.start()
     return {
         "status": "queued",
@@ -354,7 +361,7 @@ async def apply_candidate_to_track(
     }
 
 
-def run_scrape_job_thread(job_id: str) -> None:
+def run_scrape_job_thread(job_id: str, scan_after_complete: bool = False) -> None:
     try:
         asyncio.run(run_scrape_job(job_id))
     except Exception as error:  # noqa: BLE001 - background task should persist error state
@@ -370,6 +377,42 @@ def run_scrape_job_thread(job_id: str) -> None:
                 WHERE id = ?
                 """,
                 (str(error), job_id),
+            )
+    finally:
+        if scan_after_complete:
+            run_incremental_scan_after_scrape(job_id)
+
+
+def run_incremental_scan_after_scrape(job_id: str) -> None:
+    try:
+        from .local_music import scan_local_music_library
+
+        scan_result = scan_local_music_library(incremental=True)
+        if scan_result.get("status") not in {"scanned", "completed"}:
+            with db() as conn:
+                conn.execute(
+                    """
+                    UPDATE music_metadata_scrape_jobs
+                    SET last_error = ?,
+                        updated_at = current_timestamp
+                    WHERE id = ?
+                    """,
+                    (
+                        f"刮削后增量扫描未完成：{scan_result.get('status')}",
+                        job_id,
+                    ),
+                )
+    except Exception as error:  # noqa: BLE001 - keep scrape result, record scan failure
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE music_metadata_scrape_jobs
+                SET last_error = ?,
+                    error_count = error_count + 1,
+                    updated_at = current_timestamp
+                WHERE id = ?
+                """,
+                (f"刮削后增量扫描失败：{error}", job_id),
             )
 
 
@@ -389,7 +432,8 @@ async def run_scrape_job(job_id: str) -> None:
     candidate_limit = int(job_data.get("candidate_limit") or 3)
     auto_apply = bool(job_data.get("auto_apply"))
     min_confidence = float(job_data.get("min_confidence") or 0.92)
-    rows = rows_missing_metadata(filters, int(job_data.get("limit_count") or 50))
+    mode = str(job_data.get("mode") or "")
+    rows = rows_for_scrape_job(mode, filters, int(job_data.get("limit_count") or 50))
 
     with db() as conn:
         conn.execute(
@@ -521,7 +565,7 @@ async def collect_candidates(
             candidates.append(
                 {
                     "provider": provider,
-                    "status": "not_configured",
+                    "status": "error",
                     "error": f"未找到私有插件 {provider}_metadata.py。",
                 }
             )
@@ -668,6 +712,25 @@ def rows_missing_metadata(fields: list[str], limit: int) -> list[Any]:
             """,
             (limit,),
         ).fetchall()
+
+
+def rows_for_scrape_job(mode: str, fields: list[str], limit: int) -> list[Any]:
+    if mode.startswith("track_ids:"):
+        ids = [item.strip() for item in mode.removeprefix("track_ids:").split(",") if item.strip()]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            with db() as conn:
+                return conn.execute(
+                    f"""
+                    SELECT *
+                    FROM music_tracks
+                    WHERE id IN ({placeholders})
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (*ids, limit),
+                ).fetchall()
+    return rows_missing_metadata(fields, limit)
 
 
 def missing_fields(track: dict[str, Any]) -> list[str]:

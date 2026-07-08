@@ -54,6 +54,7 @@ def scan_default_assets(conn: Connection) -> list[dict]:
 def scan_default_skills(conn: Connection) -> list[dict]:
     home = Path.home()
     roots = [
+        Path(__file__).resolve().parent / "radio_skills",
         home / "Documents/徐徐如声/徐徐如声/skills",
         home / "Documents/徐徐如声/徐徐如声/.trae/skills",
         home / "Documents/徐徐如声/徐徐如声/.claude/skills",

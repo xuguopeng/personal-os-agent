@@ -183,3 +183,96 @@
 - 竖屏体验重置为纯背景：按新的设计节奏，临时清空客户端所有可见页面内容，只保留 Claudio 点阵/粒子背景层；播放、电台、聊天、画像等数据和业务方法暂时保留在代码中但不渲染，后续按“一个页面一个页面”重新加回。
 - Flutter 客户端字体切换：使用用户提供的 `LXGWWenKai-Regular.ttf` 作为新全局字体，注册字体族 `LXGWWenKai` 并替换原 `CustomFont`；旧 `1.ttf` 暂时保留但不再作为全局字体使用。
 - 纯背景页增加主题切换：在竖屏背景基线上仅加入右上角 `DARK/LIGHT` 分段开关，复用现有 `ThemeStore` 与 `AppColors`，不恢复其它页面元素，方便后续逐页搭建。
+- NAS DJ Agent Claudio 流程第一版：新增 `/v1/dj` 协议层和 `dj_profile_documents/dj_plans` 表，把 `taste.md`、`routines.md`、`mood-rules.md`、Migi-inspired 口吻技能、天气、听歌画像、最近播放、记忆和执行轨迹组装成 context window；MiniMax M3 输出结构化 `say/play/reason/segue/memoryCandidate`，客户端后续可直接按 DJ Agent 流程接入。
+- 私人 DJ 画像和每日歌单规则写入：默认语料加入用户明确偏好（周杰伦、Beyond、《后来》《喜欢你》、避开太吵/土嗨/喊麦、工作偏纯音乐且节奏强、上午中文歌、下午提神、晚上安静、结合天气推荐、每期 3 首、口播 30 秒以上但不拖长）；每日定时从 07:30 改为 07:00，并新增 `/v1/dj/today` 供客户端首次进入读取当天节目，必要时可 `autoBuild=true` 自动补生成。
+- 全天歌单定时升级：07:00 定时任务和 `/v1/dj/today?autoBuild=true` 改为生成全天三阶段电台，上午/中午下午/晚上各 3 首，每个阶段都有单独口播，最后合并成一条完整 MP3；客户端首次进入只读取当天节目并播放，不需要用户像 mmguo 一样手动输入。
+- 全天电台混音升级：服务端合成从硬拼接改为 ffmpeg 混音流程，口播后进入歌曲时歌曲开头自动降音量，片段之间使用 `acrossfade` 淡入淡出，避免生硬切换；新增 `RADIO_MIX_CROSSFADE_SECONDS`、`RADIO_MIX_DUCKING_VOLUME`、`RADIO_MIX_MUSIC_VOLUME` 可调参数。
+- DJ 聊天播放动作协议：`POST /v1/dj/chat` 现在会随回复返回 `action`，支持 `play_episode` 播放今日完整电台、`play_tracks` 播放本地曲库中的推荐歌曲队列、`build_and_play_today` 自动补生成今日电台后播放，以及 `none` 纯聊天；聊天请求不会阻塞等待 sqmusic 下载，找不到单曲时回退到今日电台动作。
+- 缺歌队列和全局补库定时：新增 `music_missing_track_queue`，聊天/电台推荐中本地匹配不到的歌会先记录到队列；后台调度每天 07:00 到 20:00 每 2 小时处理一批，先扫描匹配已下载歌曲，再对仍缺失的歌提交 sqmusic 下载，随后重新扫描并启动 QQ 音乐歌词/封面刮削；新增 `/v1/dj/missing-tracks` 和 `/v1/dj/missing-tracks/process` 查看/手动处理。
+- NAS 部署探针：新增公开接口 `GET /version`，不需要账号密码，返回当前服务版本 `v0.1` 和 `dj/daypartRadio/missingTrackQueue/mixedRadio` 功能开关；以后 NAS 重建镜像后先访问这个接口判断是否已经运行新代码，再测需要登录的 `/v1/*` 接口。
+- Flutter 竖屏 DJ 聊天/电台修正：客户端新增 root-level `/v1` 请求通道，`/dj/chat` 和 `/dj/today` 不再错误拼成 `/v1/music/dj/*`；聊天失败会在界面追加 Migi 错误气泡，回车键改为单行发送；新增 `clients/mu-music/scripts/run_macos_private.sh` 从 ignored 的 `data/secrets/agent-server.env` 注入 Basic Auth，避免把账号密码写进源码。
+- 今日电台可播放兜底：客户端首次进入改为读取 `/v1/dj/today?autoBuild=true`，找到或生成当天节目后写入播放队列；播放按钮在播放器未加载时会先加载当前电台/歌曲再播放。服务端 `/v1/dj/today` 捕获全天三阶段生成异常，自动降级到 mockTTS 的简化混音电台，兜底也失败时返回 JSON 错误而不是 HTTP 500 空白。
+- Flutter 客户端本地鉴权配置：新增 `ClientConfig` 启动读取逻辑，客户端优先从 ignored 的 `clients/mu-music/private/client_config.env` 或 `~/.mu_music/client_config.env` 读取 `AGENT_SERVER_USERNAME/AGENT_SERVER_PASSWORD`，再 fallback 到 `--dart-define`；已从 `data/secrets/agent-server.env` 同步生成两份本机私有配置文件，真实账号密码不进入 git。
+
+- NAS DJ 供应商切换：主路径从 MiniMax 改为 0029 OpenAI-compatible 文本模型 + Fish Audio `s2.1-pro-free` TTS；真实 Fish key 写入 ignored 的 `data/secrets/agent-server.env`，MiniMax 字段清空停用，0029 key 预留 `OPENAI_COMPAT_API_KEY`。
+- 今日电台播放形态调整：`/v1/dj/today` 不再复用/生成 ffmpeg 合并长音频，改为 Claudio/mmguo 式 playlist segments（阶段口播、真实歌曲、收尾口播）；新增 `/v1/music/radio/episodes/{episode_id}/segments/{segment_id}/stream` 用于播放每段口播。
+
+- 0029 文本模型配置调整：`OPENAI_COMPAT_MODEL` 从默认示例 `gpt-4o-mini` 统一改为 `gpt-5.5`，真实 ignored 的 `data/secrets/agent-server.env` 也已同步更新。
+
+- DJ 记忆与每日生成落库：新增 `radio_daily_generations`、`radio_daily_tracks`、`radio_spoken_segments`，每天电台生成会保存文案、天气、歌曲、推荐理由和 Fish 口播文件信息；新口播音频命名使用 `migi-YYYY-MM-DD-...`。聊天确认词接入：`记住` 写长期记忆并追加到画像文档，`这次有效` 标记 session-only，`忽略` 丢弃候选。
+
+- 每日电台旧记录回填：数据库初始化时会扫描 `music_radio_episodes` 旧节目，从 `episode_date`、标题日期或 script JSON 中识别日期，并把可解析的 segments 回填到 `radio_daily_generations`、`radio_daily_tracks`、`radio_spoken_segments`；已存在当天记录时跳过，避免覆盖新数据。
+
+- 接口收口第一批：客户端停止调用旧 `/v1/music/radio/*` 控制接口和 Daoliyu 登录接口，改为 `/v1/dj/status`、`/v1/dj/chat`、`/v1/dj/today`、`/v1/dj/memories/*`；服务端不再注册旧 `music_router`，删除 `music.py` 中旧 Daoliyu OpenAPI 列表、旧 radio 生成/聊天/jobs 路由和旧代理流 helper，仅在 `local_music.py` 保留 episode 音频流读取接口以兼容已有 `streamUrl`。
+
+- NAS 部署探针版本提升：公开接口 `GET /version` 从 `v0.1` 提升到 `v0.2`，NAS 重新构建镜像后访问该接口即可确认是否已经运行最新服务代码。
+
+- NAS 启动错误修复：服务启动时 `listening.py` 仍从 `music.py` 导入已移除的 Daoliyu helper，导致 uvicorn import 阶段崩溃；已改为听歌同步和电台最近播放都只读取本地曲库/播放历史，不再依赖旧 Daoliyu 代理函数。
+
+- NAS 启动修复验证：使用 Python 3.12 临时环境安装 `services/agent-server/requirements.txt` 后成功导入 `app.main`；FastAPI TestClient 请求 `GET /version` 返回 200，版本为 `v0.2`。
+
+- 旧数据库迁移修复：`music_radio_episodes` 旧表没有 `episode_date` 列时，`SCHEMA` 里提前创建 `idx_music_radio_episodes_date` 会导致启动阶段 `no such column: episode_date`；已把该索引移到 `ensure_column` 补列之后创建，并用旧表模拟验证迁移成功。
+
+- Flutter 桌面端 DJ 播放动作接入：聊天返回的 `play_episode`、`play_tracks`、`build_and_play_today` 现在会直接切换播放队列并加载音频；`normalizeTrack` 保留后端 action 的 `streamUrl`，今日电台首次自动读取后会直接初始化播放器。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，`flutter build macos --debug` 成功生成 `mu_music.app`。
+
+- Flutter 客户端鉴权修复：`HttpUtil` 改为每次 GET/POST/PUT/DELETE 请求动态合并 `ClientConfig` 的 Basic Auth header，避免 Dio 单例早于配置加载或请求自带 Options 时丢失账号密码，修复 `/v1/dj/today` 401 和音频流 401 导致的 macOS `NSURLErrorDomain -1013`。
+
+- Flutter macOS 鉴权配置打包：由于 macOS app sandbox 可能读不到项目目录或 `~/.mu_music/client_config.env`，`ClientConfig` 新增 bundle asset fallback；`private/client_config.env` 加入 Flutter assets，但该文件仍被 `.gitignore` 忽略，不进入 git。
+
+- Flutter 竖屏聊天布局修复：聊天消息改为显示最新 80 条，消息不足一屏时从输入框上方开始向上堆叠；发送/回复/刷新后增加延迟二次滚动，避免新回复因为布局高度尚未计算完成而停在上方。
+
+- Flutter DJ 今日电台超时修复：`/v1/dj/today?autoBuild=true` 属于长任务接口，客户端 receiveTimeout 从默认 15 秒提升到 180 秒；root/music 请求顺序改为固定优先局域网地址，再尝试公网，避免上次 activeBaseUrl 为公网时下次仍先走公网。
+
+- Flutter 电台旧流 404 修复：客户端不再把缺少 `segments` 的旧电台记录回退为完整 episode stream，避免请求 `/v1/music/radio/episodes/{id}/stream` 时因无 full mix 文件而 404；缺少分段时会触发重新生成今日电台。`autoBuild=true` 超时提升到 600 秒，适配 AI 文案/TTS/歌曲匹配较慢的生成链路。
+
+- 聊天消息顺序修复：客户端按 `clientOrder/createdAt` 稳定排序，同一时间戳时固定 user 在 assistant 前，避免回复显示到用户消息上方；服务端新写入聊天 turn 时 assistant 的 `created_at` 比 user 延后 1ms，从源头保证同轮对话顺序。
+
+- NAS DJ 旧合并兜底移除：`/v1/dj/today` 主路径失败时不再降级调用 `create_daily_radio_mix_episode` / full mix 合并模式；所有兜底均改为 `create_daily_radio_daypart_episode` 分段节目，优先 mockTTS，必要时本地规则文案 + mockTTS，确保后台不会再生成旧拼接/混音电台。
+
+- NAS 服务版本提升：`GET /version` 从 `v0.2` 提升到 `v0.3`，用于确认已部署“不再降级旧 full mix 合并模式”的服务端代码。
+
+- NAS DJ 生成状态修复：`GET /v1/dj/today?autoBuild=true` 在曲库为空或生成失败时不再误报“已生成”，会返回真实错误原因；`GET /v1/dj/status` 新增内置定时器状态、每日生成时间、时区和下一次运行时间；服务版本提升到 `v0.3.1`。
+
+- NAS DJ 口播诊断修复：发现今日电台使用 `mock-tts`，实际生成的是 440Hz WAV 测试音而非人声；`/v1/dj/today` 不再在 TTS 失败时自动降级 mock 口播，`/v1/dj/episode/build` 会返回明确异常类型；新增 `POST /v1/dj/tts/probe` 用于测试 NAS 到 Fish Audio 的真实 TTS 连通性；Fish TTS 请求超时提升并补充 HTTP 异常详情；服务版本提升到 `v0.3.2`。
+
+- Flutter 客户端接入口播自检和真人口播重生成：新增 `probeDjTts`、`buildDjEpisode` API 封装；播放今日电台前如果检测到旧 `mock-tts`/WAV 测试口播，会先调用 Fish TTS 探针，成功后强制重生成 `fish-tts` 分段电台并播放；电台队列末尾自动追加本期真实歌曲，让收尾口播结束后继续播放音乐而不是停在口播队列末尾。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，`flutter build macos --debug` 成功。
+
+- Flutter 歌词/口播文本自动滚动：为无时间戳的口播文本和 fallback 歌词增加独立滚动控制器，根据当前播放进度估算高亮行并自动居中滚动；有 LRC 时间戳的歌词继续使用 `GlobalMusicController.lyricScrollController` 按时间戳滚动。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，`flutter build macos --debug` 成功。
+
+- Flutter 口播文案显示修复：电台分段播放项的 `lyrics` 改为优先使用 segment 自带 `text`，竖屏 `LYRIC` 面板优先显示当前播放项的口播/歌词文本；播放上午、中午/下午、晚上或收尾口播时会显示对应段落内容，而不是整期脚本或固定 intro。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过。
+
+- Flutter/NAS 播放流与聊天输入修复：服务端 `music_radio_episodes` 返回新增 `playbackFlow`，服务版本提升到 `v0.3.3`；客户端优先按 `playbackFlow` 组装“口播 -> 歌曲 -> 口播 -> 续播歌曲”的单一播放队列，不再把口播工作流和音乐工作流分开处理；聊天发送改为先失焦并延后一帧清空输入框，避免 `TextEditingController` 通知异常；聊天排序补充 `created_at/updatedAt` 解析和稳定顺序兜底，避免回复跑到用户消息上方；竖屏 `LYRIC` 面板切歌时重新读取当前播放项，口播显示正文，歌曲段显示推荐理由作为歌词兜底。验证：`python3 -m py_compile services/agent-server/app/*.py` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，本轮未打包 macOS。
+
+- Flutter/NAS 歌词与 Claudio 播放方向调整：确认 Claudio FM 是口播音频和歌曲音频双音轨同时播放，后续按“音乐流持续播放 + 口播流插话 + 音乐 ducking 压低/恢复”实现；本轮先修歌词和高亮样式，新生成的 NAS 电台 track segment 会带 `lyrics`、`coverArtUrl`、`reason`，服务版本提升到 `v0.3.4`；竖屏歌词高亮改为只改变文字颜色，不再给当前行添加背景块。验证：`python3 -m py_compile services/agent-server/app/*.py` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，本轮未打包 macOS。
+
+- Flutter 聊天输入异常字符修复：电台聊天发送改为使用 `onSubmitted` 传入文本，所有电台聊天输入框统一增加 formatter，过滤 `┤├` 和控制字符；发送后延迟重置 `TextEditingValue`，避免 macOS/IME 在 `TextEditingController` 正在通知时同步 clear 引发报错。验证：`dart format` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，本轮未打包 macOS。
+
+- Flutter NAS 地址兜底修复：默认请求候选地址移除 `127.0.0.1:8088` 和 `localhost:8088`，避免 NAS 不在本机时聊天请求最终报 connection refused；本机调试仍可通过 `NAS_LOCAL_API_URL` / `NAS_LOCAL_ROOT_API_URL` 显式配置。聊天错误展示改为中文短提示，不再把完整 `DioException` 堆栈塞进聊天气泡。验证：`dart format` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，本轮未打包 macOS。
+
+- Flutter DJ 聊天超时修复：`/v1/dj/chat` 属于模型/记忆/播放动作接口，默认 15 秒 receiveTimeout 太短；客户端单独把聊天请求接收超时提升到 120 秒、发送超时 20 秒，避免 Migi 正常思考时被客户端提前中断。验证：`dart format` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，本轮未打包 macOS。
+
+- NAS/Flutter Claudio 双音轨第一版：`/v1/dj/chat` 返回新增 `spoken` 口播音频信息，服务端新增 `/v1/dj/spoken/{plan_id}/stream` 输出 Migi 口播 mp3；客户端新增第二个 `AudioPlayer` 播放口播，口播开始时主音乐音量 ducking 到 28%，口播结束后恢复，实现“主音乐流持续播放 + 口播流插话”的 Claudio 模式。服务版本提升到 `v0.3.5`。同时修复点播强匹配：服务端从“播放/点播/听听 + 歌名”中直接提取歌曲名先查本地曲库，`/v1/music/api/tracks` 兼容 `query/q/keyword` 三种搜索参数。验证：`python3 -m py_compile services/agent-server/app/*.py` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过，本轮未打包 macOS。
+
+- Docker Compose 配置精简：`docker-compose.yml` 移除当前流程不再需要的 MiniMax 环境变量、Daoliyu 代理 URL 和旧 ffmpeg mix 参数，保留 NAS 音乐路径、0029 文本模型、Fish TTS、天气/定时、缺失下载和 sqmusic 基础配置；新增 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 代理变量占位，真实密钥仍只放 `/data/secrets/agent-server.env`。验证：Ruby YAML 解析通过，`python3 -m py_compile services/agent-server/app/*.py` 通过；本机无 `docker` 命令，未运行 `docker compose config`。
+
+- Docker Compose 代理固定：按 NAS 部署习惯把 `HTTP_PROXY` 和 `HTTPS_PROXY` 从外部变量占位改为固定 `http://192.168.10.4:7897`，避免图形界面重新部署时环境变量丢失；`NO_PROXY` 继续保留默认局域网/本机排除列表。验证：Ruby YAML 解析通过，`python3 -m py_compile services/agent-server/app/*.py` 通过。
+
+- NAS 启动错误修复：FastAPI 不接受路由返回类型标注 `FileResponse | JSONResponse` 作为 response model，导致 `/v1/dj/spoken/{plan_id}/stream` 注册阶段启动失败；已为该路由设置 `response_model=None` 并移除 union 返回注解。验证：`python3 -m py_compile services/agent-server/app/*.py` 通过；本机缺少 FastAPI 依赖，未做完整 app import。
+
+- Flutter/NAS 点播与双音轨修复：确认线上 `GET /version` 为 `v0.3.5`，但《夜曲》在 NAS 本地曲库搜索结果为 0，`/v1/dj/chat` 退回了周杰伦其他歌曲；本轮把服务端点播逻辑改为强点播优先，缺歌时立即加入缺失下载/刮削队列，不再假装已播放相似歌，并把服务版本提升到 `v0.3.6`。客户端修复 `/v1/dj/spoken/...` 口播 URL 解析，避免错误拼成 `/v1/music/v1/dj/...`，Migi 插话才能进入第二音轨并触发 ducking；修复 sqmusic 客户端路径缺少 `/api` 的问题；DJ action track 增加 `lyrics` 字段，客户端音乐搜索改为把 keyword 传给 NAS 服务端。验证：`dart format` 通过，`python3 -m py_compile services/agent-server/app/*.py` 通过，`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；本轮按要求未打包 macOS。
+
+- Flutter/NAS 首次进入电台双音轨修复：客户端不再让 `full_mix` 合并音频抢占入口，电台播放列表改为只放真实歌曲，把前置 Migi 口播挂到下一首歌的 `radioSpokenStreamUrl` 上，歌曲开始后由全局第二播放器自动播放口播并 ducking 主音乐；歌词解析器扩展支持 `[mm:ss]`、`[mm:ss.xx]`、`[mm:ss.xxx]`、`[mm:ss:xx]` 和纯文本歌词，避免歌词格式稍有不同就解析为 0 行。NAS 服务版本提升到 `v0.3.7`；Fish TTS 新增固定 `FISH_TTS_REFERENCE_ID=802e3bc2b27e49c2995d23ef70e6ac89`，所有 Migi 口播统一使用同一个较有磁性的男声音色；DJ 点播播放前若发现歌曲缺歌词/封面，会后台触发 QQ 音乐元数据刮削任务。
+
+- Flutter/NAS 点播、歌词、喜欢列表修复：NAS 服务版本提升到 `v0.3.8`；本地曲库点播匹配改为同时查 `title/file_name/source_path`，并把文件名/路径命中作为强匹配，修复“本地有《后来》但聊天仍提示缺歌”的情况；客户端搜索二次过滤也纳入 `fileName/filePath/sourcePath`，避免服务端已搜到又被前端过滤。缺歌词/封面时刮削任务现在可以指定当前播放歌曲 ID，不再随机扫全库缺失项；扫描曲库时会保留已刮削歌词和封面，不会被空标签覆盖。Fish Audio 默认音色改为 `802e3bc2b27e49c2995d23ef70e6ac89` 的男声，`/v1/dj/tts/probe` 成功返回修复。竖屏播放器新增可拖动进度条、当前播放列表弹层、喜欢歌曲弹层；点击心会调用 NAS 喜欢接口落库，喜欢列表可“播放全部”并替换当前队列。验证：`python3 -m py_compile services/agent-server/app/*.py`、`dart format`、`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；本轮按要求未打包 macOS。
+
+- Flutter/NAS 播放列表重复、首播口播和歌词链路修复：NAS 服务版本提升到 `v0.3.9`；客户端移除电台播放列表中把真实歌曲再追加一遍的 `continuation_track` 逻辑，播放列表弹层、点播、喜欢列表和今日电台写入队列前统一按歌曲 ID 去重。启动时不再把曲库第一首普通歌写入 `currentTrack` 占位，今日电台自动播放改为检查真实播放器是否已加载/播放，避免首次进入被占位歌曲拦截而不播放 Migi 口播；手动写入播放列表时短暂抑制 playlist listener，避免同一首歌双加载打断口播。歌词显示增加后台兜底：如果当前 NAS track 没有歌词，客户端会提交当前歌曲的定向 QQ 元数据刮削任务并轮询刷新，拿到歌词后自动更新当前歌词面板。部署层新增 `services/agent-server/private_plugins` 到 `/data/private_plugins/music_metadata` 和 `/data/private_plugins/music_sources` 的只读挂载；线上探测显示当前 `v0.3.8` 的 `providers` 为空，重新部署后应能看到 `qqmusic` provider。验证：`python3 -m py_compile services/agent-server/app/*.py`、`ruby YAML.load_file("docker-compose.yml")`、`dart format`、`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；本轮按要求未打包 macOS。
+
+- NAS 媒体库导入修复：线上验证 `GET /version` 仍是 `v0.3.8`，且 `/v1/music/api/tracks?keyword=后来` 返回 0；sqmusic 可搜索并下载《后来 - 刘若英》，下载任务已有成功记录，但本地媒体扫描 382 个文件时只有 22 首跳过、361 个失败，导致已下载歌曲没有进入 `music_tracks`。本轮把服务版本提升到 `v0.4.0`，新增 `music_tracks` 旧库字段迁移，修复老 SQLite 表结构导致新文件导入失败的问题；扫描错误信息改为在 `str(error)` 为空时返回异常类型，避免 NAS 扫描报告出现空白错误。验证：`python3 -m py_compile services/agent-server/app/*.py`、`ruby YAML.load_file("docker-compose.yml")`、SQLite 旧表补字段等价测试通过；本轮按要求未打包 macOS。
+
+- NAS 缺歌定时流水线补扫描：服务版本提升到 `v0.4.1`；`process_missing_track_queue()` 现在会返回处理前增量扫描、下载后增量扫描和刮削任务信息。缺歌下载后创建 QQ 音乐歌词/封面刮削 job 时新增 `scanAfterComplete=true`，刮削后台线程结束后会自动再跑一次 `scan_local_music_library(incremental=True)`，避免定时任务下载完、歌词刮完后曲库仍然需要手动刷新。验证：`python3 -m py_compile services/agent-server/app/*.py` 通过；本轮按要求未打包 macOS。
+
+- Flutter 首次进入今日电台口播修复：线上 `/v1/dj/today` 验证今日节目 `playbackFlow` 首段为 `stage_intro` 且有口播 stream，问题在客户端入口判断过于保守以及口播只依赖播放器内部延迟触发。客户端现在在没播放时会自动接管今日 episode，不再被旧 `currentMusic` 或历史 playlist 卡住；`GlobalMusicController` 新增口播触发去重，`_playRadioEpisode()` 加载第一首歌后会主动兜底触发 Migi 口播，避免刚进入只播音乐不播文案。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；本轮按要求未打包 macOS。
+
+- Flutter 口播延迟到首次暂停的根因修复：确认 `GlobalMusicController.loadMusic()` 中 `await _audioPlayer.play()` 会一直等到主音乐被暂停/结束后才继续执行，导致排队 Migi 文案口播的代码在“第一次暂停”后才运行。主音乐播放现在改为非阻塞 `_startAudioPlayback()`，并把口播挂起到主播放器 `ready + playing` 状态后触发；切换播放、上一首/下一首中的 `_audioPlayer.play()` 也改为非阻塞启动，避免播放流程卡住后续逻辑。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；本轮按要求未打包 macOS。
+
+- Fish Audio 口播音色切换：已将 Migi 默认 Fish `FISH_TTS_REFERENCE_ID` 从旧男声切换为用户试听确认的中文口播音色 `c43ae8e1c3664eac9203f9293fabc3c9`，同步更新 `docker-compose.yml`、服务端默认配置和 README 示例；真实 Fish API key 仍只从 secret env 读取，不写入仓库。验证：`python3 -m py_compile services/agent-server/app/*.py`、`ruby YAML.load_file("docker-compose.yml")` 通过；本轮按要求未打包 macOS。

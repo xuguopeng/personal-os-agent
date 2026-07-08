@@ -9,7 +9,8 @@
 /// 常量
 class Constants {
   // 服务 api
-  static const localApiUrl = 'http://127.0.0.1:8088/v1/music';
+  static const localApiUrl = 'http://192.168.10.21:8088/v1/music';
+  static const loopbackApiUrl = 'http://127.0.0.1:8088/v1/music';
   static const customLocalApiUrl =
       String.fromEnvironment('NAS_LOCAL_API_URL', defaultValue: '');
   static const publicApiUrl = String.fromEnvironment(
@@ -17,12 +18,23 @@ class Constants {
     defaultValue: 'https://os.xuguopeng.com/v1/music',
   );
   static const apiUrl = localApiUrl;
+  static const localRootApiUrl = 'http://192.168.10.21:8088/v1';
+  static const loopbackRootApiUrl = 'http://127.0.0.1:8088/v1';
+  static const customLocalRootApiUrl =
+      String.fromEnvironment('NAS_LOCAL_ROOT_API_URL', defaultValue: '');
+  static const publicRootApiUrl = String.fromEnvironment(
+    'NAS_PUBLIC_ROOT_API_URL',
+    defaultValue: 'https://os.xuguopeng.com/v1',
+  );
   static const apiUrls = [
-    localApiUrl,
-    'http://localhost:8088/v1/music',
-    'http://192.168.10.21:8088/v1/music',
     customLocalApiUrl,
+    localApiUrl,
     publicApiUrl,
+  ];
+  static const rootApiUrls = [
+    customLocalRootApiUrl,
+    localRootApiUrl,
+    publicRootApiUrl,
   ];
   static const agentUsername =
       String.fromEnvironment('AGENT_SERVER_USERNAME', defaultValue: '');

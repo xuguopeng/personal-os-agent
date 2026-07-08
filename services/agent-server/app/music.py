@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import math
+import re
 import sqlite3
 import subprocess
 import uuid
@@ -14,13 +15,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .config import get_settings
 from .db import db
 
-router = APIRouter(prefix="/v1/music", tags=["music"])
+
+RADIO_PERSONA_SKILL_PATH = Path(__file__).resolve().parent / "radio_skills" / "migi-inspired-dj.md"
 
 RADIO_SCHEDULER_TASK: asyncio.Task | None = None
 RADIO_SCHEDULER_STATE: dict[str, Any] = {
@@ -28,6 +28,8 @@ RADIO_SCHEDULER_STATE: dict[str, Any] = {
     "lastCheckAt": "",
     "lastRunDate": "",
     "lastRunJobId": "",
+    "lastMissingDownloadSlot": "",
+    "lastMissingDownloadResult": None,
     "lastError": "",
 }
 
@@ -37,807 +39,49 @@ DAOLIYU_TOKEN_CACHE: dict[str, Any] = {
     "user": None,
 }
 
-DAOLIYU_ENDPOINTS: list[dict[str, str]] = [
-    {"method": "DELETE", "path": "/api/admin/scan-paths/{id}", "summary": "删除扫描路径"},
-    {"method": "DELETE", "path": "/api/admin/users/{id}", "summary": "删除用户"},
-    {"method": "PATCH", "path": "/api/admin/users/{id}", "summary": "更新用户"},
-    {"method": "DELETE", "path": "/api/favorites/albums/{id}", "summary": "取消收藏专辑"},
-    {"method": "DELETE", "path": "/api/favorites/audiobooks/{id}", "summary": "取消收藏有声书"},
-    {"method": "DELETE", "path": "/api/favorites/playlists/{id}", "summary": "取消收藏歌单"},
-    {"method": "DELETE", "path": "/api/favorites/tracks/{id}", "summary": "取消收藏曲目"},
-    {"method": "DELETE", "path": "/api/library/audiobooks/{id}/cover", "summary": "删除有声书封面"},
-    {"method": "POST", "path": "/api/library/audiobooks/{id}/cover", "summary": "上传有声书封面"},
-    {"method": "DELETE", "path": "/api/player/queue/{id}", "summary": "删除播放队列项"},
-    {"method": "DELETE", "path": "/api/playlists/{id}", "summary": "删除歌单"},
-    {"method": "GET", "path": "/api/playlists/{id}", "summary": "获取歌单详情"},
-    {"method": "PATCH", "path": "/api/playlists/{id}", "summary": "更新歌单"},
-    {"method": "DELETE", "path": "/api/playlists/{id}/tracks/{trackId}", "summary": "删除歌单曲目"},
-    {"method": "GET", "path": "/api/admin/audiobooks/settings", "summary": "获取有声书设置"},
-    {"method": "PUT", "path": "/api/admin/audiobooks/settings", "summary": "更新有声书设置"},
-    {"method": "GET", "path": "/api/admin/metadata-providers", "summary": "列出元数据提供商"},
-    {"method": "GET", "path": "/api/admin/plugins", "summary": "获取插件"},
-    {"method": "GET", "path": "/api/admin/scan-paths", "summary": "获取扫描路径"},
-    {"method": "POST", "path": "/api/admin/scan-paths", "summary": "创建扫描路径"},
-    {"method": "GET", "path": "/api/admin/shared-metadata", "summary": "列出共享元数据"},
-    {"method": "PUT", "path": "/api/admin/shared-metadata", "summary": "更新共享元数据"},
-    {"method": "GET", "path": "/api/admin/stats", "summary": "获取管理统计"},
-    {"method": "GET", "path": "/api/admin/transcoding/config", "summary": "获取转码配置"},
-    {"method": "POST", "path": "/api/admin/transcoding/config", "summary": "保存转码配置"},
-    {"method": "GET", "path": "/api/admin/transcoding/stats", "summary": "获取转码统计"},
-    {"method": "GET", "path": "/api/admin/users", "summary": "列出用户"},
-    {"method": "POST", "path": "/api/admin/users", "summary": "创建用户"},
-    {"method": "GET", "path": "/api/auth/bootstrap", "summary": "获取引导状态"},
-    {"method": "GET", "path": "/api/auth/profile", "summary": "获取当前用户资料"},
-    {"method": "GET", "path": "/api/favorites/albums", "summary": "列出收藏专辑"},
-    {"method": "POST", "path": "/api/favorites/albums", "summary": "收藏专辑"},
-    {"method": "GET", "path": "/api/favorites/audiobooks", "summary": "列出收藏有声书"},
-    {"method": "POST", "path": "/api/favorites/audiobooks", "summary": "收藏有声书"},
-    {"method": "GET", "path": "/api/favorites/playlists", "summary": "列出收藏歌单"},
-    {"method": "POST", "path": "/api/favorites/playlists", "summary": "收藏歌单"},
-    {"method": "GET", "path": "/api/favorites/tracks", "summary": "列出收藏曲目"},
-    {"method": "POST", "path": "/api/favorites/tracks", "summary": "收藏曲目"},
-    {"method": "GET", "path": "/api/library/albums", "summary": "列出专辑"},
-    {"method": "GET", "path": "/api/library/albums/{id}", "summary": "获取专辑详情"},
-    {"method": "GET", "path": "/api/library/artists", "summary": "列出艺术家"},
-    {"method": "GET", "path": "/api/library/artists/{id}", "summary": "获取艺术家详情"},
-    {"method": "GET", "path": "/api/library/audiobooks", "summary": "列出有声书"},
-    {"method": "GET", "path": "/api/library/audiobooks/{id}", "summary": "获取有声书详情"},
-    {"method": "PATCH", "path": "/api/library/audiobooks/{id}", "summary": "更新有声书"},
-    {"method": "GET", "path": "/api/library/audiobooks/progress", "summary": "获取有声书进度"},
-    {"method": "GET", "path": "/api/library/branding", "summary": "获取品牌配置"},
-    {"method": "GET", "path": "/api/library/playback-history/recent", "summary": "获取最近播放"},
-    {"method": "GET", "path": "/api/library/playback/top", "summary": "获取播放排行"},
-    {"method": "GET", "path": "/api/library/recommendations/daily", "summary": "获取每日推荐"},
-    {"method": "GET", "path": "/api/library/videos", "summary": "列出视频"},
-    {"method": "GET", "path": "/api/library/videos/{id}", "summary": "获取视频详情"},
-    {"method": "GET", "path": "/api/library/videos/playlists", "summary": "获取视频歌单"},
-    {"method": "GET", "path": "/api/player", "summary": "获取播放器状态"},
-    {"method": "GET", "path": "/api/playlists", "summary": "获取歌单"},
-    {"method": "POST", "path": "/api/playlists", "summary": "创建歌单"},
-    {"method": "GET", "path": "/api/playlists/{id}/track-ids", "summary": "获取歌单曲目 ID"},
-    {"method": "GET", "path": "/api/playlists/mine", "summary": "获取我的歌单"},
-    {"method": "GET", "path": "/api/playlists/public", "summary": "获取公开歌单"},
-    {"method": "GET", "path": "/api/tracks", "summary": "列出曲目"},
-    {"method": "GET", "path": "/api/tracks/{id}", "summary": "获取曲目详情"},
-    {"method": "PATCH", "path": "/api/admin/albums/{id}", "summary": "更新专辑"},
-    {"method": "PATCH", "path": "/api/admin/artists/{id}", "summary": "更新艺术家"},
-    {"method": "PATCH", "path": "/api/admin/metadata-providers/{id}", "summary": "更新元数据提供商"},
-    {"method": "PATCH", "path": "/api/admin/system-branding", "summary": "更新系统品牌"},
-    {"method": "PATCH", "path": "/api/admin/tracks/{id}", "summary": "更新曲目"},
-    {"method": "PATCH", "path": "/api/auth/myprofile", "summary": "更新我的资料"},
-    {"method": "PATCH", "path": "/api/auth/password", "summary": "修改密码"},
-    {"method": "PATCH", "path": "/api/favorites/albums/{id}/pin", "summary": "置顶收藏专辑"},
-    {"method": "PATCH", "path": "/api/favorites/audiobooks/{id}/pin", "summary": "置顶收藏有声书"},
-    {"method": "PATCH", "path": "/api/favorites/playlists/{id}/pin", "summary": "置顶收藏歌单"},
-    {"method": "PATCH", "path": "/api/playlists/{id}/tracks/reorder", "summary": "重排歌单曲目"},
-    {"method": "POST", "path": "/api/admin/metadata/apply", "summary": "应用元数据"},
-    {"method": "POST", "path": "/api/admin/metadata/artists/enrich-missing", "summary": "补全缺失艺术家元数据"},
-    {"method": "POST", "path": "/api/admin/metadata/artists/enrich/{id}", "summary": "丰富艺术家元数据"},
-    {"method": "POST", "path": "/api/admin/metadata/preview", "summary": "预览元数据"},
-    {"method": "POST", "path": "/api/admin/scan", "summary": "扫描音乐库"},
-    {"method": "POST", "path": "/api/admin/scan/incremental", "summary": "增量扫描音乐库"},
-    {"method": "POST", "path": "/api/admin/shared-metadata/enrich", "summary": "丰富共享元数据"},
-    {"method": "POST", "path": "/api/admin/shared-metadata/push", "summary": "推送共享元数据"},
-    {"method": "POST", "path": "/api/admin/system-branding/logo", "summary": "上传 Logo"},
-    {"method": "POST", "path": "/api/admin/transcoding/clear", "summary": "清空转码缓存"},
-    {"method": "POST", "path": "/api/auth/avatar", "summary": "上传头像"},
-    {"method": "POST", "path": "/api/auth/bootstrap-admin", "summary": "引导创建管理员"},
-    {"method": "POST", "path": "/api/auth/login", "summary": "登录"},
-    {"method": "POST", "path": "/api/library/audiobooks/{id}/play", "summary": "播放有声书"},
-    {"method": "POST", "path": "/api/library/audiobooks/{id}/progress", "summary": "保存有声书进度"},
-    {"method": "POST", "path": "/api/player/next", "summary": "下一首"},
-    {"method": "POST", "path": "/api/player/pause", "summary": "暂停"},
-    {"method": "POST", "path": "/api/player/play", "summary": "播放"},
-    {"method": "POST", "path": "/api/player/prev", "summary": "上一首"},
-    {"method": "POST", "path": "/api/player/queue", "summary": "创建播放队列"},
-    {"method": "PUT", "path": "/api/player/queue", "summary": "更新播放队列"},
-    {"method": "POST", "path": "/api/player/queue/{id}/move", "summary": "移动队列项"},
-    {"method": "POST", "path": "/api/player/queue/item", "summary": "添加到播放队列"},
-    {"method": "POST", "path": "/api/player/seek", "summary": "跳转播放位置"},
-    {"method": "POST", "path": "/api/player/shuffle", "summary": "切换随机播放"},
-    {"method": "POST", "path": "/api/player/volume", "summary": "设置音量"},
-    {"method": "POST", "path": "/api/playlists/{id}/cover", "summary": "上传歌单封面"},
-    {"method": "POST", "path": "/api/playlists/{id}/tracks", "summary": "添加歌单曲目"},
-]
-
-HOP_BY_HOP_HEADERS = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "host",
+DAYPART_FALLBACK_RECOMMENDATIONS: dict[str, list[dict[str, str]]] = {
+    "morning": [
+        {"title": "晴天", "artist": "周杰伦", "reason": "上午适合中文歌，用熟悉旋律启动一天。"},
+        {"title": "稻香", "artist": "周杰伦", "reason": "节奏轻一点，适合把状态慢慢拉起来。"},
+        {"title": "喜欢你", "artist": "Beyond", "reason": "这是你明确提到的回听偏好，适合放在上午。"},
+    ],
+    "afternoon": [
+        {"title": "海阔天空", "artist": "Beyond", "reason": "下午需要提神，但不走太吵的方向。"},
+        {"title": "光辉岁月", "artist": "Beyond", "reason": "节奏和精神感更明显，适合下午。"},
+        {"title": "双截棍", "artist": "周杰伦", "reason": "提高能量，但仍然贴近你的歌手偏好。"},
+    ],
+    "night": [
+        {"title": "后来", "artist": "刘若英", "reason": "这是你明确提到的常回听歌曲，适合晚上安静一点。"},
+        {"title": "安静", "artist": "周杰伦", "reason": "晚上更适合低刺激、留白多一点的歌。"},
+        {"title": "黑色幽默", "artist": "周杰伦", "reason": "情绪更收，适合夜间独处。"},
+    ],
 }
 
 
-@router.get("/status")
-async def daoliyu_status() -> dict[str, Any]:
-    checks: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=8) as client:
-        for base_url in daoliyu_base_urls():
-            try:
-                response = await client.get(f"{base_url}/api/auth/bootstrap")
-            except httpx.HTTPError as error:
-                checks.append(
-                    {
-                        "baseUrl": base_url,
-                        "status": "error",
-                        "message": f"不可达：{error}",
-                    }
-                )
-                continue
-            check = {
-                "baseUrl": base_url,
-                "status": "connected" if response.status_code < 500 else "error",
-                "httpStatus": response.status_code,
-                "message": "可用" if response.status_code < 500 else response.text[:300],
-            }
-            checks.append(check)
-            if check["status"] == "connected":
-                return {
-                    "status": "connected",
-                    "baseUrl": base_url,
-                    "activeBaseUrl": base_url,
-                    "checks": checks,
-                    "message": "倒流服务已连接。",
-                }
-    return {
-        "status": "error",
-        "baseUrl": daoliyu_base_urls()[0],
-        "activeBaseUrl": None,
-        "checks": checks,
-        "message": "所有倒流服务上游都不可达。",
-    }
-
-
-@router.get("/endpoints")
-def list_daoliyu_endpoints() -> dict[str, Any]:
-    return {
-        "service": "daoliyu",
-        "baseUrl": daoliyu_base_urls()[0],
-        "baseUrls": daoliyu_base_urls(),
-        "count": len(DAOLIYU_ENDPOINTS),
-        "proxyPrefix": "/v1/music",
-        "auth": "登录接口走 /v1/music/api/auth/login；其他接口把倒流 token 放在 Authorization: Bearer <token>。",
-        "endpoints": DAOLIYU_ENDPOINTS,
-    }
-
-
-@router.post("/auth/login")
-async def login_daoliyu_with_configured_credentials() -> JSONResponse:
-    settings = get_settings()
-    if not settings.daoliyu_username or not settings.daoliyu_password:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "not_configured",
-                "message": "NAS 服务端未配置 DAOLIYU_USERNAME / DAOLIYU_PASSWORD。",
-            },
-        )
-
-    result = await login_daoliyu()
-    if result["status"] != "authenticated":
-        return JSONResponse(status_code=200, content=result)
-    return JSONResponse(content=safe_auth_status(result))
-
-
-@router.get("/auth/status")
-async def daoliyu_auth_status() -> dict[str, Any]:
-    if not DAOLIYU_TOKEN_CACHE["token"]:
-        return {
-            "status": "not_authenticated",
-            "configured": bool(
-                get_settings().daoliyu_username and get_settings().daoliyu_password
-            ),
-            "secretFilesLoaded": len(get_settings().loaded_secret_files),
-            "baseUrl": "",
-            "user": None,
-            "message": "尚未登录倒流音乐服务。",
-        }
-
-    profile = await fetch_daoliyu_profile()
-    if profile["status"] == "authenticated":
-        return safe_auth_status(profile)
-    DAOLIYU_TOKEN_CACHE.update({"token": "", "baseUrl": "", "user": None})
-    return profile
-
-
-@router.post("/auth/logout")
-def logout_daoliyu() -> dict[str, Any]:
-    DAOLIYU_TOKEN_CACHE.update({"token": "", "baseUrl": "", "user": None})
-    return {
-        "status": "not_authenticated",
-        "message": "已清除倒流音乐服务 token 缓存。",
-    }
-
-
-@router.get("/audio/{track_id}/status")
-async def music_audio_status(track_id: str) -> dict[str, Any]:
-    track = await fetch_daoliyu_track(track_id)
-    if not isinstance(track, dict):
-        return {
-            "status": "error",
-            "message": "没有找到这首歌的详情，无法播放。",
-        }
-
-    stream_url = await build_daoliyu_track_stream_url(track_id)
-    if stream_url:
-        return {
-            "status": "ready",
-            "source": "daoliyu_stream",
-            "message": "Daoliyu 音频流已就绪。",
-        }
-
-    direct_url = first_string_value(
-        track,
-        "audioUrl",
-        "streamUrl",
-        "fileUrl",
-        "mediaUrl",
-        "downloadUrl",
-        "url",
-    )
-    if direct_url.startswith("http://") or direct_url.startswith("https://"):
-        return {
-            "status": "ready",
-            "source": "upstream_url",
-            "message": "音频源已就绪。",
-        }
-
-    file_path = resolve_track_file_path(track)
-    if not file_path:
-        return {
-            "status": "not_configured",
-            "source": "local_file",
-            "message": "NAS 服务端没有找到本地媒体文件。请把音乐目录挂载到容器，并配置 DAOLIYU_MEDIA_ROOT。",
-            "mediaRoot": get_settings().daoliyu_media_root,
-            "trackFilePath": track.get("filePath") or track.get("path") or "",
-        }
-
-    return {
-        "status": "ready",
-        "source": "local_file",
-        "message": "音频源已就绪。",
-        "contentType": guess_audio_media_type(file_path),
-        "fileSize": file_path.stat().st_size,
-    }
-
-
-@router.get("/radio/status")
-def radio_status() -> dict[str, Any]:
-    settings = get_settings()
-    output_dir = Path(settings.radio_output_dir)
-    return {
-        "status": "ready",
-        "outputDir": str(output_dir),
-        "minimaxConfigured": bool(resolved_minimax_key() and settings.minimax_group_id),
-        "voiceId": settings.minimax_tts_voice_id,
-        "model": settings.minimax_tts_model,
-        "message": "音乐电台服务已就绪。",
-    }
-
-
-@router.get("/radio/daily/status")
-def daily_radio_status() -> dict[str, Any]:
-    settings = get_settings()
-    return {
-        "status": "ready",
-        "enabled": settings.radio_daily_enabled,
-        "time": settings.radio_daily_time,
-        "timezone": settings.radio_daily_timezone,
-        "nextRunAt": next_daily_radio_run_at().isoformat(),
-        "weather": {
-            "city": settings.radio_weather_city,
-            "lat": settings.radio_weather_lat,
-            "lon": settings.radio_weather_lon,
-        },
-        "recentLimit": settings.radio_recent_limit,
-        "scheduler": RADIO_SCHEDULER_STATE,
-        "message": "每日音乐电台定时任务已配置。",
-    }
-
-
-@router.post("/radio/daily/run")
-async def run_daily_radio_now() -> JSONResponse:
-    result = await create_daily_radio_episode(force=True)
-    return JSONResponse(content=result)
-
-
-@router.post("/radio/daily/build")
-async def build_daily_radio_mix(payload: dict[str, Any] | None = None) -> JSONResponse:
-    result = await create_daily_radio_mix_episode(payload or {})
-    return JSONResponse(content=result)
-
-
-@router.get("/radio/episodes")
-def list_radio_episodes() -> dict[str, Any]:
-    with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM music_radio_episodes
-            ORDER BY created_at DESC
-            LIMIT 50
-            """
-        ).fetchall()
-    return {
-        "items": [radio_episode_row_to_dict(row) for row in rows],
-    }
-
-
-@router.get("/radio/chat")
-def list_radio_chat() -> dict[str, Any]:
-    with db() as conn:
-        message_rows = conn.execute(
-            """
-            SELECT * FROM music_radio_chat_messages
-            ORDER BY created_at ASC
-            LIMIT 80
-            """
-        ).fetchall()
-        memory_rows = conn.execute(
-            """
-            SELECT * FROM music_preference_memories
-            ORDER BY
-                CASE status
-                    WHEN 'candidate' THEN 0
-                    WHEN 'remembered' THEN 1
-                    ELSE 2
-                END,
-                created_at DESC
-            LIMIT 40
-            """
-        ).fetchall()
-    return {
-        "messages": [radio_chat_message_row_to_dict(row) for row in message_rows],
-        "memories": [music_memory_row_to_dict(row) for row in memory_rows],
-    }
-
-
-@router.post("/radio/chat")
-async def create_radio_chat_message(payload: dict[str, Any]) -> JSONResponse:
-    content = str(payload.get("content") or "").strip()
-    if not content:
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "请输入要告诉私人 DJ 的内容。"},
-        )
-    now_text = datetime.now(ZoneInfo(get_settings().radio_daily_timezone)).isoformat()
-    user_message_id = uuid.uuid4().hex
-    local_classification = classify_radio_chat(content)
-    chat_context = load_radio_chat_context()
-    classification = await classify_radio_chat_with_minimax(
-        content,
-        local_classification,
-        chat_context,
-    )
-    memory_id = ""
-    memory: dict[str, Any] | None = None
-
-    with db() as conn:
-        if classification["memoryCandidate"]:
-            memory_id = uuid.uuid4().hex
-            conn.execute(
-                """
-                INSERT INTO music_preference_memories (
-                    id, category, title, content, source_message_id, status, confidence
-                ) VALUES (?, ?, ?, ?, ?, 'candidate', ?)
-                """,
-                (
-                    memory_id,
-                    classification["memoryCategory"],
-                    classification["memoryTitle"],
-                    classification["memoryContent"],
-                    user_message_id,
-                    classification["confidence"],
-                ),
-            )
-            memory = music_memory_row_to_dict(
-                conn.execute(
-                    "SELECT * FROM music_preference_memories WHERE id = ?",
-                    (memory_id,),
-                ).fetchone()
-            )
-        conn.execute(
-            """
-            INSERT INTO music_radio_chat_messages (
-                id, role, content, intent_type, effect_summary, memory_id, created_at
-            ) VALUES (?, 'user', ?, ?, ?, ?, ?)
-            """,
-            (
-                user_message_id,
-                content,
-                classification["intentType"],
-                classification["effectSummary"],
-                memory_id,
-                now_text,
-            ),
-        )
-        assistant_message_id = uuid.uuid4().hex
-        assistant_content = classification.get("reply") or build_radio_chat_reply(
-            content,
-            classification,
-            memory,
-        )
-        conn.execute(
-            """
-            INSERT INTO music_radio_chat_messages (
-                id, role, content, intent_type, effect_summary, memory_id, created_at
-            ) VALUES (?, 'assistant', ?, ?, ?, ?, ?)
-            """,
-            (
-                assistant_message_id,
-                assistant_content,
-                classification["intentType"],
-                classification["effectSummary"],
-                memory_id,
-                now_text,
-            ),
-        )
-        user_row = conn.execute(
-            "SELECT * FROM music_radio_chat_messages WHERE id = ?",
-            (user_message_id,),
-        ).fetchone()
-        assistant_row = conn.execute(
-            "SELECT * FROM music_radio_chat_messages WHERE id = ?",
-            (assistant_message_id,),
-        ).fetchone()
-    return JSONResponse(
-        content={
-            "status": "ok",
-            "intentType": classification["intentType"],
-            "generator": classification.get("generator", "local-rules"),
-            "message": radio_chat_message_row_to_dict(user_row),
-            "assistant": radio_chat_message_row_to_dict(assistant_row),
-            "memoryCandidate": memory,
-        }
-    )
-
-
-@router.post("/radio/memories/{memory_id}/{action}")
-def update_radio_memory(memory_id: str, action: str) -> JSONResponse:
-    status = {
-        "remember": "remembered",
-        "ignore": "ignored",
-    }.get(action)
-    if status is None:
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "记忆操作只支持 remember 或 ignore。"},
-        )
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM music_preference_memories WHERE id = ?",
-            (memory_id,),
-        ).fetchone()
-        if row is None:
-            return JSONResponse(
-                status_code=404,
-                content={"status": "not_found", "message": "没有找到这条记忆候选。"},
-            )
-        conn.execute(
-            """
-            UPDATE music_preference_memories
-            SET status = ?, updated_at = current_timestamp
-            WHERE id = ?
-            """,
-            (status, memory_id),
-        )
-        updated = conn.execute(
-            "SELECT * FROM music_preference_memories WHERE id = ?",
-            (memory_id,),
-        ).fetchone()
-    return JSONResponse(content={"status": "ok", "memory": music_memory_row_to_dict(updated)})
-
-
-@router.get("/radio/jobs/{job_id}")
-def get_radio_job(job_id: str) -> JSONResponse:
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM music_radio_jobs WHERE id = ?",
-            (job_id,),
-        ).fetchone()
-    if row is None:
-        return JSONResponse(
-            status_code=404,
-            content={"status": "not_found", "message": "没有找到这个电台生成任务。"},
-        )
-    return JSONResponse(content=radio_job_row_to_dict(row))
-
-
-@router.post("/radio/jobs")
-async def create_radio_job(payload: dict[str, Any]) -> JSONResponse:
-    raw_track_ids = payload.get("trackIds") or payload.get("track_ids") or []
-    track_ids = [
-        str(item).strip()
-        for item in raw_track_ids
-        if str(item).strip() and not str(item).startswith("radio_")
-    ][:12]
-    title = str(payload.get("title") or "").strip() or "今日 NAS 音乐电台"
-    job_id = uuid.uuid4().hex
-
-    with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO music_radio_jobs (
-                id, title, status, track_ids_json
-            ) VALUES (?, ?, 'running', ?)
-            """,
-            (job_id, title, json.dumps(track_ids, ensure_ascii=False)),
-        )
-
+def load_radio_persona_skill() -> str:
     try:
-        tracks = await fetch_radio_seed_tracks(track_ids)
-        intro_script = build_radio_intro_script(title, tracks, weather=None, daily=False)
-        outro_script = build_radio_outro_script(title, tracks, weather=None)
-        script = f"{intro_script}\n\n--- 收尾 ---\n{outro_script}"
-        episode = await generate_radio_episode(
-            job_id=job_id,
-            title=title,
-            track_ids=track_ids,
-            script=script,
-            intro_script=intro_script,
-            outro_script=outro_script,
-            tracks=tracks,
-        )
-        with db() as conn:
-            conn.execute(
-                """
-                UPDATE music_radio_jobs
-                SET status = 'completed',
-                    mode = ?,
-                    script = ?,
-                    episode_id = ?,
-                    updated_at = current_timestamp
-                WHERE id = ?
-                """,
-                (episode["generator"], script, episode["id"], job_id),
-            )
-        return JSONResponse(
-            content={
-                "id": job_id,
-                "title": title,
-                "status": "completed",
-                "episode": episode,
-                "message": "音乐电台已生成。",
-            }
-        )
-    except Exception as error:
-        with db() as conn:
-            conn.execute(
-                """
-                UPDATE music_radio_jobs
-                SET status = 'failed', error = ?, updated_at = current_timestamp
-                WHERE id = ?
-                """,
-                (str(error), job_id),
-            )
-        return JSONResponse(
-            status_code=500,
-            content={
-                "id": job_id,
-                "title": title,
-                "status": "failed",
-                "message": f"音乐电台生成失败：{error}",
-            },
-        )
+        return RADIO_PERSONA_SKILL_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
-@router.get("/radio/episodes/{episode_id}/stream")
-def stream_radio_episode(episode_id: str, request: Request) -> Response:
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM music_radio_episodes WHERE id = ?",
-            (episode_id,),
-        ).fetchone()
-    if row is None:
-        return JSONResponse(
-            status_code=404,
-            content={"status": "not_found", "message": "没有找到这个电台节目。"},
-        )
-    episode = radio_episode_row_to_dict(row)
-    audio_path = Path(episode["audioPath"])
-    output_root = Path(get_settings().radio_output_dir).resolve()
-    try:
-        audio_path.resolve().relative_to(output_root)
-    except ValueError:
-        return JSONResponse(
-            status_code=403,
-            content={"status": "error", "message": "电台音频路径不在允许目录。"},
-        )
-    if not audio_path.exists() or not audio_path.is_file():
-        return JSONResponse(
-            status_code=404,
-            content={"status": "not_found", "message": "电台音频文件不存在。"},
-        )
-    return ranged_file_response(audio_path, request)
+def first_string_value(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
-@router.get("/radio/episodes/{episode_id}/outro/stream")
-def stream_radio_episode_outro(episode_id: str, request: Request) -> Response:
-    with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM music_radio_episodes WHERE id = ?",
-            (episode_id,),
-        ).fetchone()
-    if row is None:
-        return JSONResponse(
-            status_code=404,
-            content={"status": "not_found", "message": "没有找到这个电台节目。"},
-        )
-    episode = radio_episode_row_to_dict(row)
-    audio_path = Path(episode.get("outroAudioPath") or "")
-    output_root = Path(get_settings().radio_output_dir).resolve()
-    try:
-        audio_path.resolve().relative_to(output_root)
-    except (ValueError, RuntimeError):
-        return JSONResponse(
-            status_code=403,
-            content={"status": "error", "message": "电台收尾音频路径不在允许目录。"},
-        )
-    if not audio_path.exists() or not audio_path.is_file():
-        return JSONResponse(
-            status_code=404,
-            content={"status": "not_found", "message": "电台收尾音频文件不存在。"},
-        )
-    return ranged_file_response(audio_path, request)
-
-
-@router.get("/audio/{track_id}")
-async def stream_music_audio(track_id: str, request: Request) -> Response:
-    track = await fetch_daoliyu_track(track_id)
-    if not isinstance(track, dict):
-        return JSONResponse(
-            status_code=404,
-            content={
-                "status": "error",
-                "message": "没有找到这首歌的详情，无法播放。",
-            },
-        )
-
-    stream_url = await build_daoliyu_track_stream_url(track_id)
-    if stream_url:
-        return await proxy_audio_url(stream_url, request)
-
-    direct_url = first_string_value(
-        track,
-        "audioUrl",
-        "streamUrl",
-        "fileUrl",
-        "mediaUrl",
-        "downloadUrl",
-        "url",
-    )
-    if direct_url.startswith("http://") or direct_url.startswith("https://"):
-        return await proxy_audio_url(direct_url, request)
-
-    file_path = resolve_track_file_path(track)
-    if not file_path:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "status": "not_configured",
-                "message": "曲目没有可播放 URL，且 NAS 服务端没有找到本地媒体文件。请把音乐目录挂载到容器，并配置 DAOLIYU_MEDIA_ROOT。",
-                "mediaRoot": get_settings().daoliyu_media_root,
-                "trackFilePath": track.get("filePath") or track.get("path") or "",
-            },
-        )
-
-    return ranged_file_response(file_path, request)
-
-
-@router.api_route(
-    "/{full_path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-)
-async def proxy_daoliyu(full_path: str, request: Request) -> Response:
-    target_path = normalize_proxy_path(full_path)
-    body = await request.body()
-    headers = {
-        key: value
-        for key, value in request.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-    }
-    if should_auto_attach_token(target_path, headers):
-        token = await get_or_login_daoliyu_token()
-        if token:
-            headers["authorization"] = f"Bearer {token}"
-    errors: list[dict[str, str]] = []
-    upstream: httpx.Response | None = None
-    target_url = ""
-    async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-        for base_url in daoliyu_base_urls():
-            target_url = f"{base_url}{target_path}"
-            try:
-                upstream = await client.request(
-                    request.method,
-                    target_url,
-                    params=request.query_params,
-                    content=body,
-                    headers=headers,
-                )
-            except httpx.HTTPError as error:
-                errors.append({"target": target_url, "message": str(error)})
-                continue
-            if upstream.status_code < 500:
-                break
-            errors.append({"target": target_url, "message": f"HTTP {upstream.status_code}"})
-
-    if upstream is None:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "status": "error",
-                "message": "倒流服务代理失败：所有上游都不可达。",
-                "errors": errors,
-            },
-        )
-
-    response_headers = {
-        key: value
-        for key, value in upstream.headers.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-    }
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=response_headers,
-        media_type=upstream.headers.get("content-type"),
-    )
-
-
-async def fetch_daoliyu_track(track_id: str) -> Any:
-    token = await get_or_login_daoliyu_token()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-        for base_url in daoliyu_base_urls():
-            try:
-                response = await client.get(
-                    f"{base_url}/api/tracks/{track_id}",
-                    headers=headers,
-                )
-            except httpx.HTTPError:
-                continue
-            if response.status_code == 404:
-                return None
-            if response.status_code < 400:
-                return response.json()
-    return None
-
+# External /v1/music control routes moved to local_music.py and /v1/dj.
+# This module now keeps scheduler, radio planning, TTS, and legacy helper internals.
 
 async def fetch_radio_seed_tracks(track_ids: list[str]) -> list[dict[str, Any]]:
     local_tracks = fetch_local_radio_seed_tracks(track_ids)
     if local_tracks:
         return local_tracks[:8]
 
-    tracks: list[dict[str, Any]] = []
-    for track_id in track_ids:
-        track = await fetch_daoliyu_track(track_id)
-        if isinstance(track, dict):
-            tracks.append(track)
-    if tracks:
-        return tracks[:8]
-
-    token = await get_or_login_daoliyu_token()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-        for base_url in daoliyu_base_urls():
-            try:
-                response = await client.get(
-                    f"{base_url}/api/tracks",
-                    params={"limit": 8, "offset": 0},
-                    headers=headers,
-                )
-            except httpx.HTTPError:
-                continue
-            if response.status_code < 400:
-                payload = response.json()
-                items = payload.get("items") if isinstance(payload, dict) else payload
-                if isinstance(items, list):
-                    return [item for item in items if isinstance(item, dict)][:8]
-    return []
+    return fetch_local_recent_playback_tracks(8)
 
 
 def fetch_local_radio_seed_tracks(track_ids: list[str]) -> list[dict[str, Any]]:
@@ -896,9 +140,18 @@ async def radio_scheduler_loop() -> None:
             now = datetime.now(ZoneInfo(settings.radio_daily_timezone))
             RADIO_SCHEDULER_STATE["lastCheckAt"] = now.isoformat()
             if settings.radio_daily_enabled and should_run_daily_radio(now):
-                result = await create_daily_radio_episode()
+                result = await create_daily_radio_daypart_episode(
+                    {
+                        "title": f"沐音今日歌单 {now.date().isoformat()}",
+                    }
+                )
                 RADIO_SCHEDULER_STATE["lastRunDate"] = now.date().isoformat()
                 RADIO_SCHEDULER_STATE["lastRunJobId"] = result.get("id", "")
+                RADIO_SCHEDULER_STATE["lastError"] = ""
+            if should_run_missing_download(now):
+                result = process_missing_track_queue(settings.missing_download_batch_size)
+                RADIO_SCHEDULER_STATE["lastMissingDownloadSlot"] = missing_download_slot(now)
+                RADIO_SCHEDULER_STATE["lastMissingDownloadResult"] = result
                 RADIO_SCHEDULER_STATE["lastError"] = ""
         except Exception as error:
             RADIO_SCHEDULER_STATE["lastError"] = str(error)
@@ -915,12 +168,31 @@ def should_run_daily_radio(now: datetime) -> bool:
     return not daily_radio_episode_exists(today)
 
 
+def should_run_missing_download(now: datetime) -> bool:
+    settings = get_settings()
+    if not settings.missing_download_enabled:
+        return False
+    if now.hour < settings.missing_download_start_hour or now.hour >= settings.missing_download_end_hour:
+        return False
+    interval = max(1, settings.missing_download_interval_hours)
+    if (now.hour - settings.missing_download_start_hour) % interval != 0:
+        return False
+    if now.minute > 5:
+        return False
+    slot = missing_download_slot(now)
+    return RADIO_SCHEDULER_STATE.get("lastMissingDownloadSlot") != slot
+
+
+def missing_download_slot(now: datetime) -> str:
+    return f"{now.date().isoformat()}T{now.hour:02d}:00"
+
+
 def parse_daily_time(value: str) -> time:
     try:
         hour_text, minute_text = value.split(":", 1)
         return time(hour=int(hour_text), minute=int(minute_text))
     except (ValueError, TypeError):
-        return time(hour=7, minute=30)
+        return time(hour=7, minute=0)
 
 
 def next_daily_radio_run_at() -> datetime:
@@ -934,15 +206,21 @@ def next_daily_radio_run_at() -> datetime:
 
 
 def daily_radio_episode_exists(day: date) -> bool:
-    title_prefix = f"西安天气音乐电台 {day.isoformat()}"
+    day_text = day.isoformat()
     with db() as conn:
         row = conn.execute(
             """
             SELECT id FROM music_radio_episodes
             WHERE title LIKE ?
+               OR title LIKE ?
+               OR title LIKE ?
             LIMIT 1
             """,
-            (f"{title_prefix}%",),
+            (
+                f"西安天气音乐电台 {day_text}%",
+                f"沐音今日歌单 {day_text}%",
+                f"%{day_text}%",
+            ),
         ).fetchone()
     return row is not None
 
@@ -953,14 +231,144 @@ def latest_daily_radio_mix_episode(day: date) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT * FROM music_radio_episodes
-            WHERE title LIKE ?
-              AND generator LIKE '%ffmpeg%'
+            WHERE (episode_date = ? OR title LIKE ?)
+              AND generator LIKE '%playlist-segments%'
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (f"%{day_text}%",),
+            (day_text, f"%{day_text}%"),
         ).fetchone()
     return radio_episode_row_to_dict(row) if row else None
+
+
+def build_radio_playback_flow(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    flow: list[dict[str, Any]] = []
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            continue
+        item = dict(segment)
+        item["flowIndex"] = index
+        item["kind"] = "music" if str(item.get("type") or "") == "track" else "spoken"
+        flow.append(item)
+    return flow
+
+
+async def create_daily_radio_daypart_episode(payload: dict[str, Any]) -> dict[str, Any]:
+    settings = get_settings()
+    now = datetime.now(ZoneInfo(settings.radio_daily_timezone))
+    today = now.date()
+    title = str(payload.get("title") or f"沐音今日歌单 {today.isoformat()}").strip()
+    force_regenerate = bool(payload.get("force") or payload.get("regenerate"))
+    force_mock_script = bool(payload.get("mockScript"))
+    force_mock_tts = bool(payload.get("mockTts") or payload.get("mockAudio"))
+    if not force_regenerate:
+        existing_episode = latest_daily_radio_mix_episode(today)
+        if existing_episode:
+            return {
+                "status": "cached",
+                "episode": existing_episode,
+                "message": "今天的全天歌单已经生成过，已直接复用。",
+                "date": today.isoformat(),
+            }
+
+    weather = await fetch_radio_weather()
+    recent_tracks = await fetch_recent_playback_tracks(settings.radio_recent_limit)
+    local_pool = fetch_local_recent_playback_tracks(max(settings.radio_recent_limit, 60))
+    context_tracks = dedupe_radio_tracks([*recent_tracks, *local_pool])
+    if not context_tracks:
+        context_tracks = await fetch_radio_seed_tracks([])
+    context_tracks = context_tracks[:60]
+
+    script_plan = await generate_daypart_radio_script_plan(
+        title=title,
+        today=today,
+        weather=weather,
+        recent_tracks=context_tracks,
+        force_mock=force_mock_script,
+    )
+    recommendations: list[dict[str, Any]] = []
+    for stage in script_plan["stages"]:
+        recommendations.extend(stage.get("tracks") or [])
+    selected_tracks = await ensure_radio_mix_tracks_available(recommendations, 9, allow_download=False)
+    if len(selected_tracks) < 9:
+        selected_tracks = dedupe_radio_tracks(
+            [
+                *selected_tracks,
+                *[track for track in context_tracks if str(track.get("sourcePath") or "").strip()],
+            ]
+        )[:9]
+    if not selected_tracks:
+        return {
+            "status": "error",
+            "message": "没有可用于合并的本地音乐文件。请先扫描曲库或下载歌曲。",
+        }
+
+    stages = attach_tracks_to_daypart_stages(script_plan["stages"], selected_tracks)
+    script = json.dumps(
+        {
+            "title": title,
+            "mode": "dayparts",
+            "date": today.isoformat(),
+            "weather": weather,
+            "stages": stages,
+            "outro": script_plan.get("outro", ""),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    selected_track_ids = [str(track.get("id") or "") for track in selected_tracks if track.get("id")]
+    job_id = uuid.uuid4().hex
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_radio_jobs (
+                id, title, status, mode, track_ids_json, script
+            ) VALUES (?, ?, 'running', 'dayparts', ?, ?)
+            """,
+            (job_id, title, json.dumps(selected_track_ids, ensure_ascii=False), script),
+        )
+
+    try:
+        episode = await generate_radio_daypart_sequence_episode(
+            job_id=job_id,
+            title=title,
+            track_ids=selected_track_ids,
+            script=script,
+            stages=stages,
+            outro_script=str(script_plan.get("outro") or ""),
+            force_mock_tts=force_mock_tts,
+        )
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE music_radio_jobs
+                SET status = 'completed',
+                    mode = ?,
+                    episode_id = ?,
+                    updated_at = current_timestamp
+                WHERE id = ?
+                """,
+                (episode["generator"], episode["id"], job_id),
+            )
+        return {
+            "id": job_id,
+            "status": "completed",
+            "episode": episode,
+            "weather": weather,
+            "scriptPlan": script_plan,
+            "message": "全天三阶段私人电台已生成。",
+        }
+    except Exception as error:
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE music_radio_jobs
+                SET status = 'failed', error = ?, updated_at = current_timestamp
+                WHERE id = ?
+                """,
+                (str(error), job_id),
+            )
+        raise
 
 
 async def create_daily_radio_episode(force: bool = False) -> dict[str, Any]:
@@ -1210,25 +618,7 @@ async def fetch_radio_weather() -> dict[str, Any]:
 
 
 async def fetch_recent_playback_tracks(limit: int) -> list[dict[str, Any]]:
-    local_tracks = fetch_local_recent_playback_tracks(limit)
-    if local_tracks:
-        return local_tracks
-
-    token = await get_or_login_daoliyu_token()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-        for base_url in daoliyu_base_urls():
-            try:
-                response = await client.get(
-                    f"{base_url}/api/library/playback-history/recent",
-                    params={"limit": limit},
-                    headers=headers,
-                )
-            except httpx.HTTPError:
-                continue
-            if response.status_code < 400:
-                return extract_tracks_from_playback_payload(response.json())[:limit]
-    return []
+    return fetch_local_recent_playback_tracks(limit)
 
 
 def fetch_local_recent_playback_tracks(limit: int) -> list[dict[str, Any]]:
@@ -1522,11 +912,11 @@ async def generate_daily_radio_script_plan(
     force_mock: bool = False,
 ) -> dict[str, Any]:
     fallback = build_fallback_radio_script_plan(title, today, weather, recent_tracks, track_count)
-    if force_mock or not resolved_minimax_key() or not get_settings().minimax_group_id:
+    if force_mock or not resolved_llm_key():
         return fallback
     prompt = build_minimax_radio_prompt(title, today, weather, recent_tracks, track_count)
     try:
-        result = await generate_minimax_chat_json(prompt)
+        result = await generate_llm_json(prompt)
     except Exception:
         return fallback
     title_value = str(result.get("title") or title).strip()
@@ -1562,7 +952,7 @@ async def generate_daily_radio_script_plan(
         "intro": intro or fallback["intro"],
         "tracks": clean_tracks[:track_count],
         "outro": outro or fallback["outro"],
-        "generator": "minimax-chat",
+        "generator": f"{get_settings().llm_provider}-chat",
     }
 
 
@@ -1573,6 +963,7 @@ def build_minimax_radio_prompt(
     recent_tracks: list[dict[str, Any]],
     track_count: int,
 ) -> str:
+    persona_skill = load_radio_persona_skill()
     track_lines = []
     for index, track in enumerate(recent_tracks[:20], start=1):
         track_lines.append(
@@ -1581,13 +972,17 @@ def build_minimax_radio_prompt(
         )
     weather_line = build_weather_intro(weather) or "天气暂时未知。"
     return (
-        "你是一个私人音乐电台主持人，风格像朋友在旁边轻声介绍音乐，不像新闻播报，也不像产品测试文案。\n"
+        "你是一个私人音乐电台主持人。说话方式遵循下方电台人格技能，但不要自称原作角色。\n"
+        "电台人格技能：\n"
+        + (persona_skill or "- 使用克制、理性、私人化的中文 DJ 口吻。\n")
+        + "\n"
         "请根据日期、天气和我的最近听歌记录，生成一期自然的中文电台脚本。\n"
         "关键要求：\n"
         f"- 日期：{today.isoformat()}\n"
         f"- 标题：{title}\n"
         f"- 天气：{weather_line}\n"
         f"- 选择 {track_count} 首歌，优先从最近听歌记录里选；如果推荐新歌，必须给出歌名和歌手。\n"
+        "- 人格只影响说话方式；选歌仍必须基于最近听歌记录、天气和日期，不要因为人格编造偏好。\n"
         "- intro 是开场口播，会在所有歌曲播放前一次性播完；不要写“接下来第一首/第二首马上播放”这种机械串词。\n"
         "- intro 要包含：今天的天气、这期歌单的整体情绪、每首歌 1 句具体推荐理由，最后自然进入播放。\n"
         "- outro 是所有歌曲播完后的收尾，像晚一点回头总结，不要像广告语。\n"
@@ -1602,13 +997,197 @@ def build_minimax_radio_prompt(
     )
 
 
-async def generate_minimax_chat_json(prompt: str) -> dict[str, Any]:
+async def generate_daypart_radio_script_plan(
+    *,
+    title: str,
+    today: date,
+    weather: dict[str, Any],
+    recent_tracks: list[dict[str, Any]],
+    force_mock: bool = False,
+) -> dict[str, Any]:
+    fallback = build_fallback_daypart_radio_script_plan(title, today, weather, recent_tracks)
+    if force_mock or not resolved_llm_key():
+        return fallback
+    prompt = build_minimax_daypart_radio_prompt(title, today, weather, recent_tracks)
+    try:
+        result = await generate_llm_json(prompt)
+    except Exception:
+        return fallback
+    stages = result.get("stages") if isinstance(result.get("stages"), list) else []
+    clean_stages: list[dict[str, Any]] = []
+    for index, fallback_stage in enumerate(fallback["stages"]):
+        raw_stage = stages[index] if index < len(stages) and isinstance(stages[index], dict) else {}
+        raw_tracks = raw_stage.get("tracks") if isinstance(raw_stage.get("tracks"), list) else []
+        clean_tracks: list[dict[str, str]] = []
+        for item in raw_tracks[:3]:
+            if not isinstance(item, dict):
+                continue
+            track_title = str(item.get("title") or "").strip()
+            if not track_title:
+                continue
+            clean_tracks.append(
+                {
+                    "title": track_title,
+                    "artist": str(item.get("artist") or "").strip(),
+                    "album": str(item.get("album") or "").strip(),
+                    "reason": str(item.get("reason") or "").strip(),
+                }
+            )
+        if len(clean_tracks) < 3:
+            fallback_tracks = fallback_stage.get("tracks") or []
+            for item in fallback_tracks:
+                if len(clean_tracks) >= 3:
+                    break
+                clean_tracks.append(item)
+        if len(clean_tracks) < 3:
+            seed_tracks = DAYPART_FALLBACK_RECOMMENDATIONS.get(fallback_stage["key"], [])
+            for item in seed_tracks:
+                if len(clean_tracks) >= 3:
+                    break
+                if any(
+                    normalize_radio_text(track.get("title")) == normalize_radio_text(item.get("title"))
+                    and normalize_radio_text(track.get("artist")) == normalize_radio_text(item.get("artist"))
+                    for track in clean_tracks
+                ):
+                    continue
+                clean_tracks.append(item)
+        clean_stages.append(
+            {
+                "key": fallback_stage["key"],
+                "name": str(raw_stage.get("name") or fallback_stage["name"]).strip(),
+                "timeRange": fallback_stage["timeRange"],
+                "intro": str(raw_stage.get("intro") or fallback_stage["intro"]).strip(),
+                "tracks": clean_tracks[:3],
+            }
+        )
+    return {
+        "title": str(result.get("title") or title).strip() or title,
+        "stages": clean_stages,
+        "outro": str(result.get("outro") or fallback["outro"]).strip(),
+        "generator": f"{get_settings().llm_provider}-chat",
+    }
+
+
+def build_minimax_daypart_radio_prompt(
+    title: str,
+    today: date,
+    weather: dict[str, Any],
+    recent_tracks: list[dict[str, Any]],
+) -> str:
+    persona_skill = load_radio_persona_skill()
+    weather_line = build_weather_intro(weather) or "天气暂时未知。"
+    track_lines = []
+    for index, track in enumerate(recent_tracks[:40], start=1):
+        track_lines.append(
+            f"{index}. {first_string_value(track, 'title', 'name') or '未知歌曲'} - "
+            f"{radio_artist_name(track)} - {radio_album_name(track) or '未知专辑'}"
+        )
+    return (
+        "你是沐音 FM 的私人 AI DJ，要为用户生成今天一整天的三阶段歌单。\n"
+        "说话方式遵循下方电台人格技能，但不要自称原作角色。\n"
+        "电台人格技能：\n"
+        + (persona_skill or "- 使用克制、理性、私人化的中文 DJ 口吻。\n")
+        + "\n"
+        "用户明确偏好：喜欢周杰伦、Beyond、《后来》《喜欢你》；避开太吵、土嗨、喊麦；工作偏纯音乐和节奏强；上午中文歌；下午提神；晚上安静；每阶段 3 首。\n"
+        "任务：生成上午、中午/下午、晚上三个阶段，每个阶段 3 首歌，每个阶段都有一段口播。\n"
+        "关键要求：\n"
+        f"- 日期：{today.isoformat()}\n"
+        f"- 标题：{title}\n"
+        f"- 天气：{weather_line}\n"
+        "- 选歌优先来自最近听歌记录；如果推荐新歌，必须给出歌名和歌手。\n"
+        "- 上午：中文歌，像一天的启动；中午/下午：提神，节奏更明显；晚上：安静一点。\n"
+        "- 每段 intro 大约 80-160 个中文字符，要像 mmguo/Claudio：有观察、有推荐理由、有自然过渡，不要干巴巴报幕。\n"
+        "- 不要出现：测试音频、生成中、推荐理由：、第 1 首、感谢收听。\n"
+        "- 只输出 JSON，不要 markdown，不要额外解释。\n"
+        "JSON 格式："
+        '{"title":"...","stages":[{"key":"morning","name":"上午","intro":"...","tracks":[{"title":"...","artist":"...","album":"可空","reason":"..."}]},{"key":"afternoon","name":"中午/下午","intro":"...","tracks":[...]},{"key":"night","name":"晚上","intro":"...","tracks":[...]}],"outro":"..."}\n'
+        "最近听歌记录：\n"
+        + "\n".join(track_lines)
+    )
+
+
+def build_fallback_daypart_radio_script_plan(
+    title: str,
+    today: date,
+    weather: dict[str, Any],
+    recent_tracks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    stage_defs = [
+        ("morning", "上午", "07:00-11:30", "上午先用中文歌启动。样本还不够厚，我会优先从你最近听过的歌里选，避免太吵，也不把情绪推得过猛。"),
+        ("afternoon", "中午/下午", "11:30-18:30", "中午到下午需要一点提神，但不需要土嗨。这里会把节奏抬起来一点，让注意力回到手上。"),
+        ("night", "晚上", "18:30-23:30", "晚上不适合再用声音硬推你往前走。这里收一点，偏安静，适合把今天慢慢放下来。"),
+    ]
+    tracks = dedupe_radio_tracks(recent_tracks)
+    stages = []
+    for index, (key, name, time_range, intro) in enumerate(stage_defs):
+        stage_tracks = tracks[index * 3 : index * 3 + 3]
+        recommendations = [
+            {
+                "title": first_string_value(track, "title", "name") or "未知歌曲",
+                "artist": radio_artist_name(track),
+                "album": radio_album_name(track),
+                "reason": radio_recommend_reason(track_index, first_string_value(track, "title", "name") or "未知歌曲", radio_artist_name(track), weather),
+            }
+            for track_index, track in enumerate(stage_tracks, start=1)
+        ]
+        for item in DAYPART_FALLBACK_RECOMMENDATIONS.get(key, []):
+            if len(recommendations) >= 3:
+                break
+            if any(
+                normalize_radio_text(track.get("title")) == normalize_radio_text(item.get("title"))
+                and normalize_radio_text(track.get("artist")) == normalize_radio_text(item.get("artist"))
+                for track in recommendations
+            ):
+                continue
+            recommendations.append(item)
+        stages.append(
+            {
+                "key": key,
+                "name": name,
+                "timeRange": time_range,
+                "intro": intro,
+                "tracks": recommendations,
+            }
+        )
+    return {
+        "title": title,
+        "stages": stages,
+        "outro": f"今天的三段歌单先到这里。{build_weather_intro(weather) or ''}如果哪一段更贴近你，明天我会把那个方向的权重加大。",
+        "generator": "fallback",
+        "date": today.isoformat(),
+    }
+
+
+def attach_tracks_to_daypart_stages(
+    stages: list[dict[str, Any]],
+    tracks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    result = []
+    cursor = 0
+    for stage in stages:
+        stage_tracks = tracks[cursor : cursor + 3]
+        cursor += 3
+        result.append(
+            {
+                "key": stage.get("key", ""),
+                "name": stage.get("name", ""),
+                "timeRange": stage.get("timeRange", ""),
+                "intro": stage.get("intro", ""),
+                "tracks": stage_tracks,
+            }
+        )
+    return result
+
+
+async def generate_llm_json(prompt: str) -> dict[str, Any]:
     settings = get_settings()
-    minimax_key = resolved_minimax_key()
-    url = f"https://api.minimax.chat/v1/text/chatcompletion_v2?GroupId={settings.minimax_group_id}"
+    llm_key = resolved_llm_key()
+    if not llm_key:
+        raise RuntimeError("文本模型未配置 OPENAI_COMPAT_API_KEY。")
+    url = f"{settings.openai_compat_base_url}/responses"
     payload = {
-        "model": settings.minimax_chat_model,
-        "messages": [
+        "model": settings.openai_compat_model,
+        "input": [
             {
                 "role": "system",
                 "content": "你是一个会输出严格 JSON 的中文私人音乐电台文案助手。",
@@ -1616,25 +1195,50 @@ async def generate_minimax_chat_json(prompt: str) -> dict[str, Any]:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.7,
-        "max_tokens": 1200,
+        "top_p": 1,
+        "max_output_tokens": 1200,
     }
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
             url,
             headers={
-                "Authorization": f"Bearer {minimax_key}",
+                "Authorization": f"Bearer {llm_key}",
                 "Content-Type": "application/json",
             },
             json=payload,
         )
     if response.status_code >= 400:
-        raise RuntimeError(f"MiniMax Chat HTTP {response.status_code}: {response.text[:300]}")
+        raise RuntimeError(f"{settings.llm_provider} Chat HTTP {response.status_code}: {response.text[:300]}")
     data = response.json()
-    content = extract_minimax_chat_content(data)
+    content = extract_chat_content(data)
     return parse_json_from_text(content)
 
 
-def extract_minimax_chat_content(data: dict[str, Any]) -> str:
+async def generate_minimax_chat_json(prompt: str) -> dict[str, Any]:
+    return await generate_llm_json(prompt)
+
+
+def extract_chat_content(data: dict[str, Any]) -> str:
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"]
+    output = data.get("output")
+    if isinstance(output, list):
+        chunks: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    text = part.get("text") or part.get("value")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            elif isinstance(content, str):
+                chunks.append(content)
+        if chunks:
+            return "\n".join(chunks)
     if isinstance(data.get("choices"), list) and data["choices"]:
         choice = data["choices"][0]
         if isinstance(choice, dict):
@@ -1706,6 +1310,7 @@ def build_fallback_radio_script_plan(
 async def ensure_radio_mix_tracks_available(
     recommendations: list[Any],
     track_count: int,
+    allow_download: bool = True,
 ) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     missing: list[dict[str, str]] = []
@@ -1723,6 +1328,8 @@ async def ensure_radio_mix_tracks_available(
             missing.append({"title": title, "artist": artist})
 
     if missing:
+        enqueue_missing_tracks(missing, source="radio_generation")
+    if missing and allow_download:
         for item in missing:
             download_recommended_track(item["title"], item["artist"])
         from .local_music import scan_local_music_library
@@ -1746,29 +1353,322 @@ async def ensure_radio_mix_tracks_available(
     return dedupe_radio_tracks(selected)[:track_count]
 
 
+def enqueue_missing_tracks(items: list[dict[str, Any]], source: str) -> int:
+    queued = 0
+    with db() as conn:
+        for item in items:
+            title = str(item.get("title") or "").strip()
+            artist = str(item.get("artist") or "").strip()
+            if not title:
+                continue
+            conn.execute(
+                """
+                INSERT INTO music_missing_track_queue (
+                    id, title, artist, album, reason, source, status
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending')
+                ON CONFLICT(title, artist) DO UPDATE SET
+                    reason = CASE
+                        WHEN excluded.reason != '' THEN excluded.reason
+                        ELSE music_missing_track_queue.reason
+                    END,
+                    source = excluded.source,
+                    status = CASE
+                        WHEN music_missing_track_queue.status IN ('matched', 'download_requested') THEN music_missing_track_queue.status
+                        ELSE 'pending'
+                    END,
+                    updated_at = current_timestamp
+                """,
+                (
+                    uuid.uuid4().hex,
+                    title,
+                    artist,
+                    str(item.get("album") or "").strip(),
+                    str(item.get("reason") or "").strip(),
+                    source,
+                ),
+            )
+            queued += 1
+    return queued
+
+
+def missing_track_queue_status(limit: int = 100) -> dict[str, Any]:
+    with db() as conn:
+        counts = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT status, count(*) AS count
+                FROM music_missing_track_queue
+                GROUP BY status
+                ORDER BY status
+                """
+            ).fetchall()
+        ]
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM music_missing_track_queue
+            ORDER BY
+                CASE status
+                    WHEN 'pending' THEN 0
+                    WHEN 'error' THEN 1
+                    WHEN 'download_requested' THEN 2
+                    WHEN 'matched' THEN 3
+                    ELSE 4
+                END,
+                updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return {
+        "status": "ready",
+        "counts": counts,
+        "items": [missing_queue_row_to_dict(row) for row in rows],
+        "scheduler": {
+            "enabled": get_settings().missing_download_enabled,
+            "startHour": get_settings().missing_download_start_hour,
+            "endHour": get_settings().missing_download_end_hour,
+            "intervalHours": get_settings().missing_download_interval_hours,
+            "batchSize": get_settings().missing_download_batch_size,
+        },
+    }
+
+
+def process_missing_track_queue(limit: int | None = None) -> dict[str, Any]:
+    settings = get_settings()
+    batch_size = limit or settings.missing_download_batch_size
+    from .local_music import scan_local_music_library
+    from .metadata_scrape import ScrapeJobCreateRequest, create_scrape_job
+
+    initial_scan = scan_local_music_library(incremental=True)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM music_missing_track_queue
+            WHERE status IN ('pending', 'error', 'download_requested')
+              AND attempts < 6
+            ORDER BY
+                CASE status WHEN 'pending' THEN 0 WHEN 'download_requested' THEN 1 ELSE 2 END,
+                updated_at ASC
+            LIMIT ?
+            """,
+            (batch_size,),
+        ).fetchall()
+
+    processed = 0
+    matched = 0
+    requested = 0
+    errors = 0
+    post_download_scan: dict[str, Any] | None = None
+    scrape_job: dict[str, Any] | None = None
+    for row in rows:
+        processed += 1
+        title = row["title"]
+        artist = row["artist"]
+        local = find_local_track_for_radio(title, artist)
+        if local:
+            update_missing_queue_row(
+                row["id"],
+                status="matched",
+                matched_track_id=str(local.get("id") or ""),
+                download_result={},
+                error="",
+            )
+            matched += 1
+            continue
+        try:
+            result = download_recommended_track(title, artist)
+            status = "download_requested" if result.get("status") in {"queued", "success"} else "error"
+            update_missing_queue_row(
+                row["id"],
+                status=status,
+                matched_track_id="",
+                download_result=result,
+                error="" if status == "download_requested" else str(result.get("message") or result.get("status") or ""),
+            )
+            if status == "download_requested":
+                requested += 1
+            else:
+                errors += 1
+        except Exception as error:  # noqa: BLE001 - queue should keep going
+            update_missing_queue_row(
+                row["id"],
+                status="error",
+                matched_track_id="",
+                download_result={},
+                error=str(error),
+            )
+            errors += 1
+    if processed:
+        post_download_scan = scan_local_music_library(incremental=True)
+        scrape_job = create_scrape_job(
+            ScrapeJobCreateRequest(
+                providers=["qqmusic"],
+                missing=["lyrics", "cover"],
+                limit=50,
+                candidateLimit=3,
+                autoApply=True,
+                minConfidence=0.92,
+                scanAfterComplete=True,
+            )
+        )
+    return {
+        "status": "completed",
+        "processed": processed,
+        "matched": matched,
+        "downloadRequested": requested,
+        "errors": errors,
+        "initialIncrementalScan": summarize_scan_result(initial_scan),
+        "postDownloadIncrementalScan": summarize_scan_result(post_download_scan),
+        "metadataScrapeJob": scrape_job,
+        "postScrapeIncrementalScan": (
+            {
+                "status": "scheduled",
+                "jobId": scrape_job.get("jobId") or scrape_job.get("id") or "",
+                "message": "歌词/封面刮削任务完成后会自动再跑一次增量扫描。",
+            }
+            if scrape_job
+            else None
+        ),
+    }
+
+
+def summarize_scan_result(scan_result: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not scan_result:
+        return None
+    return {
+        "status": scan_result.get("status", ""),
+        "mode": scan_result.get("mode", ""),
+        "scanned": scan_result.get("scanned", 0),
+        "imported": scan_result.get("imported", 0),
+        "skipped": scan_result.get("skipped", 0),
+        "errorCount": scan_result.get("errorCount", 0),
+        "durationSeconds": scan_result.get("durationSeconds", 0),
+    }
+
+
+def update_missing_queue_row(
+    row_id: str,
+    *,
+    status: str,
+    matched_track_id: str,
+    download_result: dict[str, Any],
+    error: str,
+) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE music_missing_track_queue
+            SET status = ?,
+                attempts = attempts + 1,
+                matched_track_id = ?,
+                download_result_json = ?,
+                last_error = ?,
+                last_attempt_at = current_timestamp,
+                updated_at = current_timestamp
+            WHERE id = ?
+            """,
+            (
+                status,
+                matched_track_id,
+                json.dumps(download_result, ensure_ascii=False),
+                error,
+                row_id,
+            ),
+        )
+
+
+def missing_queue_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "artist": row["artist"],
+        "album": row["album"],
+        "reason": row["reason"],
+        "source": row["source"],
+        "status": row["status"],
+        "attempts": row["attempts"],
+        "matchedTrackId": row["matched_track_id"],
+        "downloadResult": json.loads(row["download_result_json"] or "{}"),
+        "lastError": row["last_error"],
+        "lastAttemptAt": row["last_attempt_at"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
 def find_local_track_for_radio(title: str, artist: str) -> dict[str, Any] | None:
     normalized_title = normalize_radio_text(title)
     normalized_artist = normalize_radio_text(artist)
+    if not normalized_title:
+        return None
+    like_title = f"%{title.strip()}%"
     with db() as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM music_tracks
-            WHERE title != '' OR file_name != ''
-            ORDER BY play_count DESC, updated_at DESC
-            LIMIT 500
+            WHERE title LIKE ?
+               OR file_name LIKE ?
+               OR source_path LIKE ?
+               OR (? != '' AND artist LIKE ?)
+            ORDER BY
+                CASE
+                    WHEN title = ? THEN 0
+                    WHEN file_name = ? THEN 1
+                    WHEN title LIKE ? THEN 2
+                    WHEN file_name LIKE ? THEN 3
+                    ELSE 4
+                END,
+                play_count DESC,
+                updated_at DESC
+            LIMIT 80
             """
+            ,
+            (
+                like_title,
+                like_title,
+                like_title,
+                artist.strip(),
+                f"%{artist.strip()}%",
+                title.strip(),
+                title.strip(),
+                like_title,
+                like_title,
+            ),
         ).fetchall()
+        if not rows:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM music_tracks
+                WHERE title != '' OR file_name != ''
+                ORDER BY play_count DESC, updated_at DESC
+                LIMIT 2000
+                """
+            ).fetchall()
     best_row = None
     best_score = 0.0
     for row in rows:
-        row_title = normalize_radio_text(row["title"] or Path(row["source_path"]).stem)
+        row_file_name = row["file_name"] or Path(row["source_path"]).stem
+        row_source = Path(row["source_path"]).stem
+        row_title = normalize_radio_text(row["title"] or row_file_name or row_source)
+        row_file_title = normalize_radio_text(row_file_name)
+        row_source_title = normalize_radio_text(row_source)
         row_artist = normalize_radio_text(row["artist"])
         score = 0.0
-        if normalized_title and normalized_title == row_title:
+        if normalized_title and normalized_title in {row_title, row_file_title, row_source_title}:
             score += 0.75
-        elif normalized_title and (normalized_title in row_title or row_title in normalized_title):
-            score += 0.45
+        elif normalized_title and (
+            normalized_title in row_title
+            or row_title in normalized_title
+            or normalized_title in row_file_title
+            or normalized_title in row_source_title
+        ):
+            file_name_match = normalized_title in row_file_title or normalized_title in row_source_title
+            score += 0.72 if file_name_match else 0.45
         if normalized_artist and row_artist and normalized_artist in row_artist:
             score += 0.25
         if score > best_score:
@@ -1879,6 +1779,24 @@ def normalize_radio_text(value: Any) -> str:
     return text
 
 
+def episode_date_from_title(title: str) -> str:
+    match = re.search(r"\d{4}-\d{2}-\d{2}", title)
+    return match.group(0) if match else ""
+
+
+def episode_date_from_script(script: str, fallback_title: str = "") -> str:
+    try:
+        data = json.loads(script)
+    except json.JSONDecodeError:
+        return episode_date_from_title(fallback_title)
+    value = str(data.get("date") or "").strip() if isinstance(data, dict) else ""
+    return value if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else episode_date_from_title(fallback_title)
+
+
+def radio_audio_basename(day_text: str) -> str:
+    return f"migi-{day_text}" if day_text else f"migi-{datetime.now().date().isoformat()}"
+
+
 async def generate_radio_episode(
     *,
     job_id: str,
@@ -1900,15 +1818,15 @@ async def generate_radio_episode(
     outro_audio_path = output_dir / f"{episode_id}-outro.wav"
     intro_text = intro_script or script
     outro_text = outro_script or ""
-    if resolved_minimax_key() and settings.minimax_group_id:
+    if resolved_tts_provider() != "mock":
         audio_format = "mp3"
-        generator = "minimax"
+        generator = f"{resolved_tts_provider()}-tts"
         audio_path = output_dir / f"{episode_id}.mp3"
         outro_audio_path = output_dir / f"{episode_id}-outro.mp3"
-        audio_bytes = await generate_minimax_tts(intro_text)
+        audio_bytes = await generate_tts_audio(intro_text)
         audio_path.write_bytes(audio_bytes)
         if outro_text:
-            outro_audio_path.write_bytes(await generate_minimax_tts(outro_text))
+            outro_audio_path.write_bytes(await generate_tts_audio(outro_text))
     else:
         write_mock_radio_wav(audio_path, intro_text)
         if outro_text:
@@ -1948,16 +1866,18 @@ async def generate_radio_episode(
         else "",
     }
     with db() as conn:
+        episode_date = episode_date_from_title(title)
         conn.execute(
             """
             INSERT INTO music_radio_episodes (
-                id, title, summary, script, audio_path, outro_audio_path,
+                id, episode_date, title, summary, script, audio_path, outro_audio_path,
                 audio_format, duration_seconds, outro_duration_seconds,
                 source_track_ids_json, segments_json, generator
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 episode_id,
+                episode_date,
                 title,
                 summary,
                 script,
@@ -1993,10 +1913,11 @@ async def generate_radio_mix_episode(
     outro_path = output_dir / f"{episode_id}-outro.mp3"
     final_path = output_dir / f"{episode_id}-mix.mp3"
 
-    generator = "minimax-chat+minimax-tts+ffmpeg"
-    if not force_mock_tts and resolved_minimax_key() and settings.minimax_group_id:
-        intro_path.write_bytes(await generate_minimax_tts(intro_script))
-        outro_path.write_bytes(await generate_minimax_tts(outro_script))
+    tts_provider = "mock" if force_mock_tts else resolved_tts_provider()
+    generator = f"{settings.llm_provider}-chat+{tts_provider}-tts+ffmpeg"
+    if tts_provider != "mock":
+        intro_path.write_bytes(await generate_tts_audio(intro_script))
+        outro_path.write_bytes(await generate_tts_audio(outro_script))
     else:
         generator = "fallback-script+mock-tts+ffmpeg"
         intro_path = output_dir / f"{episode_id}-intro.wav"
@@ -2012,7 +1933,7 @@ async def generate_radio_mix_episode(
     if not music_paths:
         raise RuntimeError("没有找到可合并的本地音乐文件。")
 
-    concat_audio_files([intro_path, *music_paths, outro_path], final_path)
+    mix_audio_files([intro_path, *music_paths, outro_path], final_path)
     summary = build_radio_summary(tracks)
     duration_seconds = probe_audio_duration_seconds(final_path)
     segments = build_radio_mix_segments(
@@ -2035,21 +1956,24 @@ async def generate_radio_mix_episode(
         "outroDurationSeconds": probe_audio_duration_seconds(outro_path),
         "sourceTrackIds": track_ids,
         "segments": segments,
+        "playbackFlow": build_radio_playback_flow(segments),
         "generator": generator,
         "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
         "outroStreamUrl": f"/v1/music/radio/episodes/{episode_id}/outro/stream",
     }
     with db() as conn:
+        episode_date = episode_date_from_title(title)
         conn.execute(
             """
             INSERT INTO music_radio_episodes (
-                id, title, summary, script, audio_path, outro_audio_path,
+                id, episode_date, title, summary, script, audio_path, outro_audio_path,
                 audio_format, duration_seconds, outro_duration_seconds,
                 source_track_ids_json, segments_json, generator
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 episode_id,
+                episode_date,
                 title,
                 summary,
                 script,
@@ -2064,6 +1988,412 @@ async def generate_radio_mix_episode(
             ),
         )
     return episode
+
+
+async def generate_radio_daypart_mix_episode(
+    *,
+    job_id: str,
+    title: str,
+    track_ids: list[str],
+    script: str,
+    stages: list[dict[str, Any]],
+    outro_script: str,
+    force_mock_tts: bool = False,
+) -> dict[str, Any]:
+    settings = get_settings()
+    output_dir = Path(settings.radio_output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    episode_id = uuid.uuid4().hex
+    final_path = output_dir / f"{episode_id}-dayparts-mix.mp3"
+
+    generator = f"{settings.llm_provider}-chat+{resolved_tts_provider()}-tts+ffmpeg-mix+dayparts"
+    audio_inputs: list[Path] = []
+    segments: list[dict[str, Any]] = []
+    all_tracks: list[dict[str, Any]] = []
+
+    use_minimax_tts = not force_mock_tts and resolved_tts_provider() != "mock"
+    if not use_minimax_tts:
+        generator = "fallback-script+mock-tts+ffmpeg-mix+dayparts"
+
+    for stage_index, stage in enumerate(stages, start=1):
+        stage_key = str(stage.get("key") or f"stage_{stage_index}")
+        stage_name = str(stage.get("name") or f"阶段 {stage_index}")
+        intro_text = str(stage.get("intro") or "").strip() or f"{stage_name}的三首歌，从你的最近记录里开始。"
+        intro_suffix = "mp3" if use_minimax_tts else "wav"
+        intro_path = output_dir / f"{episode_id}-{stage_key}-intro.{intro_suffix}"
+        if use_minimax_tts:
+            intro_path.write_bytes(await generate_tts_audio(intro_text))
+        else:
+            write_mock_radio_wav(intro_path, intro_text)
+        audio_inputs.append(intro_path)
+        segments.append(
+            {
+                "type": "stage_intro",
+                "stage": stage_key,
+                "stageName": stage_name,
+                "id": f"radio_{episode_id}_{stage_key}_intro",
+                "title": f"{stage_name}口播",
+                "artist": "Migi",
+                "audioPath": str(intro_path),
+                "durationSeconds": probe_audio_duration_seconds(intro_path),
+            }
+        )
+        for track in stage.get("tracks") or []:
+            source_path = Path(str(track.get("sourcePath") or ""))
+            if not source_path.exists() or not source_path.is_file():
+                continue
+            audio_inputs.append(source_path)
+            all_tracks.append(track)
+            segments.append(
+                {
+                    "type": "track",
+                    "stage": stage_key,
+                    "stageName": stage_name,
+                    "id": str(track.get("id") or ""),
+                    "title": first_string_value(track, "title", "name") or "未知歌曲",
+                    "artist": radio_artist_name(track),
+                    "album": radio_album_name(track),
+                    "sourcePath": str(source_path),
+                    "coverArtUrl": str(track.get("coverArtUrl") or ""),
+                    "lyrics": str(track.get("lyrics") or ""),
+                    "reason": str(track.get("reason") or ""),
+                    "durationSeconds": int(track.get("durationSeconds") or 0),
+                }
+            )
+
+    if not all_tracks:
+        raise RuntimeError("没有找到可合并的本地音乐文件。")
+
+    outro_suffix = "mp3" if use_minimax_tts else "wav"
+    outro_path = output_dir / f"{episode_id}-outro.{outro_suffix}"
+    outro_text = outro_script.strip() or "今天的歌单先到这里。明天我会继续按你的记录修正。"
+    if use_minimax_tts:
+        outro_path.write_bytes(await generate_tts_audio(outro_text))
+    else:
+        write_mock_radio_wav(outro_path, outro_text)
+    audio_inputs.append(outro_path)
+    segments.append(
+        {
+            "type": "outro",
+            "id": f"radio_{episode_id}_outro",
+            "title": "结束口播",
+            "artist": "Migi",
+            "audioPath": str(outro_path),
+            "durationSeconds": probe_audio_duration_seconds(outro_path),
+        }
+    )
+
+    mix_audio_files(audio_inputs, final_path)
+    duration_seconds = probe_audio_duration_seconds(final_path)
+    segments.append(
+        {
+            "type": "full_mix",
+            "id": f"radio_{episode_id}_mix",
+            "title": "全天三阶段完整电台",
+            "artist": "沐音 FM",
+            "audioPath": str(final_path),
+            "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
+            "durationSeconds": duration_seconds,
+        }
+    )
+    summary = " / ".join(
+        f"{stage.get('name', '阶段')} {len(stage.get('tracks') or [])} 首"
+        for stage in stages
+    )
+    episode = {
+        "id": episode_id,
+        "title": title,
+        "summary": summary,
+        "script": script,
+        "audioPath": str(final_path),
+        "outroAudioPath": str(outro_path),
+        "audioFormat": "mp3",
+        "durationSeconds": duration_seconds,
+        "outroDurationSeconds": probe_audio_duration_seconds(outro_path),
+        "sourceTrackIds": track_ids,
+        "segments": segments,
+        "generator": generator,
+        "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
+        "outroStreamUrl": f"/v1/music/radio/episodes/{episode_id}/outro/stream",
+    }
+    with db() as conn:
+        episode_date = episode_date_from_title(title)
+        conn.execute(
+            """
+            INSERT INTO music_radio_episodes (
+                id, episode_date, title, summary, script, audio_path, outro_audio_path,
+                audio_format, duration_seconds, outro_duration_seconds,
+                source_track_ids_json, segments_json, generator
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                episode_id,
+                episode_date,
+                title,
+                summary,
+                script,
+                str(final_path),
+                str(outro_path),
+                "mp3",
+                duration_seconds,
+                episode["outroDurationSeconds"],
+                json.dumps(track_ids, ensure_ascii=False),
+                json.dumps(segments, ensure_ascii=False),
+                generator,
+            ),
+        )
+    return episode
+
+
+async def generate_radio_daypart_sequence_episode(
+    *,
+    job_id: str,
+    title: str,
+    track_ids: list[str],
+    script: str,
+    stages: list[dict[str, Any]],
+    outro_script: str,
+    force_mock_tts: bool = False,
+) -> dict[str, Any]:
+    settings = get_settings()
+    output_dir = Path(settings.radio_output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    episode_id = uuid.uuid4().hex
+    tts_provider = "mock" if force_mock_tts else resolved_tts_provider()
+    audio_format = "wav" if tts_provider == "mock" else "mp3"
+    generator = f"{settings.llm_provider}-chat+{tts_provider}-tts+playlist-segments"
+    episode_date = episode_date_from_script(script, title)
+    audio_base = radio_audio_basename(episode_date)
+    segments: list[dict[str, Any]] = []
+    all_tracks: list[dict[str, Any]] = []
+
+    for stage_index, stage in enumerate(stages, start=1):
+        stage_key = str(stage.get("key") or f"stage_{stage_index}")
+        stage_name = str(stage.get("name") or f"阶段 {stage_index}")
+        intro_text = str(stage.get("intro") or "").strip() or f"{stage_name}的三首歌，从你的最近记录里开始。"
+        intro_path = output_dir / f"{audio_base}-{stage_key}-intro.{audio_format}"
+        if tts_provider == "mock":
+            write_mock_radio_wav(intro_path, intro_text)
+        else:
+            intro_path.write_bytes(await generate_tts_audio(intro_text))
+        intro_segment_id = f"radio_{episode_id}_{stage_key}_intro"
+        segments.append(
+            {
+                "type": "stage_intro",
+                "stage": stage_key,
+                "stageName": stage_name,
+                "id": intro_segment_id,
+                "title": f"{stage_name}口播",
+                "artist": "Migi",
+                "audioPath": str(intro_path),
+                "streamUrl": f"/v1/music/radio/episodes/{episode_id}/segments/{intro_segment_id}/stream",
+                "audioFormat": audio_format,
+                "durationSeconds": probe_audio_duration_seconds(intro_path),
+                "text": intro_text,
+            }
+        )
+        for track in stage.get("tracks") or []:
+            source_path = Path(str(track.get("sourcePath") or ""))
+            if not source_path.exists() or not source_path.is_file():
+                continue
+            all_tracks.append(track)
+            segments.append(
+                {
+                    "type": "track",
+                    "stage": stage_key,
+                    "stageName": stage_name,
+                    "id": str(track.get("id") or ""),
+                    "title": first_string_value(track, "title", "name") or "未知歌曲",
+                    "artist": radio_artist_name(track),
+                    "album": radio_album_name(track),
+                    "sourcePath": str(source_path),
+                    "coverArtUrl": str(track.get("coverArtUrl") or ""),
+                    "lyrics": str(track.get("lyrics") or ""),
+                    "durationSeconds": int(track.get("durationSeconds") or 0),
+                    "reason": str(track.get("reason") or ""),
+                }
+            )
+
+    if not all_tracks:
+        raise RuntimeError("没有找到可播放的本地音乐文件。")
+
+    outro_text = outro_script.strip() or "今天的歌单先到这里。明天我会继续按你的记录修正。"
+    outro_path = output_dir / f"{audio_base}-outro.{audio_format}"
+    if tts_provider == "mock":
+        write_mock_radio_wav(outro_path, outro_text)
+    else:
+        outro_path.write_bytes(await generate_tts_audio(outro_text))
+    segments.append(
+        {
+            "type": "outro",
+            "id": f"radio_{episode_id}_outro",
+            "title": "结束口播",
+            "artist": "Migi",
+            "audioPath": str(outro_path),
+            "streamUrl": f"/v1/music/radio/episodes/{episode_id}/segments/radio_{episode_id}_outro/stream",
+            "audioFormat": audio_format,
+            "durationSeconds": probe_audio_duration_seconds(outro_path),
+            "text": outro_text,
+        }
+    )
+
+    first_voice = next(
+        (Path(str(segment.get("audioPath"))) for segment in segments if segment.get("type") != "track"),
+        outro_path,
+    )
+    duration_seconds = sum(int(segment.get("durationSeconds") or 0) for segment in segments)
+    summary = " / ".join(
+        f"{stage.get('name', '阶段')} {len(stage.get('tracks') or [])} 首"
+        for stage in stages
+    )
+    episode = {
+        "id": episode_id,
+        "title": title,
+        "summary": summary,
+        "script": script,
+        "audioPath": str(first_voice),
+        "outroAudioPath": str(outro_path),
+        "audioFormat": audio_format,
+        "durationSeconds": duration_seconds,
+        "outroDurationSeconds": probe_audio_duration_seconds(outro_path),
+        "sourceTrackIds": track_ids,
+        "segments": segments,
+        "generator": generator,
+        "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
+        "outroStreamUrl": f"/v1/music/radio/episodes/{episode_id}/outro/stream",
+    }
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO music_radio_episodes (
+                id, episode_date, title, summary, script, audio_path, outro_audio_path,
+                audio_format, duration_seconds, outro_duration_seconds,
+                source_track_ids_json, segments_json, generator
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                episode_id,
+                episode_date,
+                title,
+                summary,
+                script,
+                str(first_voice),
+                str(outro_path),
+                audio_format,
+                duration_seconds,
+                episode["outroDurationSeconds"],
+                json.dumps(track_ids, ensure_ascii=False),
+                json.dumps(segments, ensure_ascii=False),
+                generator,
+            ),
+        )
+        persist_radio_daily_generation(
+            conn,
+            episode=episode,
+            episode_date=episode_date,
+            weather=(json.loads(script).get("weather", {}) if script.strip().startswith("{") else {}),
+            script_plan=(json.loads(script) if script.strip().startswith("{") else {}),
+            tts_provider=tts_provider,
+            tts_model=settings.fish_tts_model if tts_provider == "fish" else settings.minimax_tts_model,
+        )
+    return episode
+
+
+def persist_radio_daily_generation(
+    conn: sqlite3.Connection,
+    *,
+    episode: dict[str, Any],
+    episode_date: str,
+    weather: dict[str, Any],
+    script_plan: dict[str, Any],
+    tts_provider: str,
+    tts_model: str,
+) -> None:
+    if not episode_date:
+        return
+    generation_id = str(episode.get("id") or uuid.uuid4().hex)
+    conn.execute("DELETE FROM radio_daily_tracks WHERE episode_date = ?", (episode_date,))
+    conn.execute("DELETE FROM radio_spoken_segments WHERE episode_date = ?", (episode_date,))
+    conn.execute(
+        """
+        INSERT INTO radio_daily_generations (
+            id, episode_date, episode_id, title, weather_json, script_plan_json,
+            generator, status, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'generated', current_timestamp)
+        ON CONFLICT(episode_date) DO UPDATE SET
+            id = excluded.id,
+            episode_id = excluded.episode_id,
+            title = excluded.title,
+            weather_json = excluded.weather_json,
+            script_plan_json = excluded.script_plan_json,
+            generator = excluded.generator,
+            status = 'generated',
+            updated_at = current_timestamp
+        """,
+        (
+            generation_id,
+            episode_date,
+            generation_id,
+            str(episode.get("title") or ""),
+            json.dumps(weather, ensure_ascii=False),
+            json.dumps(script_plan, ensure_ascii=False),
+            str(episode.get("generator") or ""),
+        ),
+    )
+    track_position = 0
+    for segment in episode.get("segments", []):
+        if not isinstance(segment, dict):
+            continue
+        segment_type = str(segment.get("type") or "")
+        if segment_type == "track":
+            track_position += 1
+            conn.execute(
+                """
+                INSERT INTO radio_daily_tracks (
+                    id, generation_id, episode_date, stage_key, stage_name, position,
+                    track_id, title, artist, album, reason, source_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    generation_id,
+                    episode_date,
+                    str(segment.get("stage") or ""),
+                    str(segment.get("stageName") or ""),
+                    track_position,
+                    str(segment.get("id") or ""),
+                    str(segment.get("title") or ""),
+                    str(segment.get("artist") or ""),
+                    str(segment.get("album") or ""),
+                    str(segment.get("reason") or ""),
+                    str(segment.get("sourcePath") or ""),
+                ),
+            )
+            continue
+        if segment_type in {"stage_intro", "intro", "outro"}:
+            conn.execute(
+                """
+                INSERT INTO radio_spoken_segments (
+                    id, generation_id, episode_date, segment_type, stage_key, title,
+                    text, audio_path, audio_format, tts_provider, tts_model,
+                    duration_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(segment.get("id") or uuid.uuid4().hex),
+                    generation_id,
+                    episode_date,
+                    segment_type,
+                    str(segment.get("stage") or ""),
+                    str(segment.get("title") or ""),
+                    str(segment.get("text") or ""),
+                    str(segment.get("audioPath") or ""),
+                    str(segment.get("audioFormat") or ""),
+                    tts_provider,
+                    tts_model,
+                    int(segment.get("durationSeconds") or 0),
+                ),
+            )
 
 
 def concat_audio_files(input_paths: list[Path], output_path: Path) -> None:
@@ -2095,6 +2425,72 @@ def concat_audio_files(input_paths: list[Path], output_path: Path) -> None:
         raise RuntimeError("未找到 ffmpeg，请在 NAS 镜像或系统中安装 ffmpeg。") from error
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 合并失败：{result.stderr[-1000:]}")
+
+
+def mix_audio_files(input_paths: list[Path], output_path: Path) -> None:
+    if len(input_paths) < 2:
+        raise RuntimeError("混音至少需要两段输入。")
+    settings = get_settings()
+    crossfade = max(0.3, min(settings.radio_mix_crossfade_seconds, 5.0))
+    ducking_volume = max(0.05, min(settings.radio_mix_ducking_volume, 0.6))
+    music_volume = max(0.2, min(settings.radio_mix_music_volume, 1.4))
+    duck_seconds = max(3.0, min(crossfade + 5.0, 12.0))
+    filter_parts: list[str] = []
+    previous_label = ""
+
+    for index, path in enumerate(input_paths):
+        is_voice = is_radio_voice_segment(path)
+        if is_voice:
+            volume_filter = "volume=1.0"
+        else:
+            volume_filter = (
+                f"volume=if(lt(t\\,{duck_seconds:.2f})\\,"
+                f"{ducking_volume:.3f}\\,{music_volume:.3f})"
+            )
+        filter_parts.append(
+            f"[{index}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+            f"{volume_filter},afade=t=in:st=0:d=0.35[a{index}]"
+        )
+        current_label = f"a{index}"
+        if index == 0:
+            previous_label = current_label
+            continue
+        output_label = f"mix{index}"
+        filter_parts.append(
+            f"[{previous_label}][{current_label}]"
+            f"acrossfade=d={crossfade:.2f}:c1=tri:c2=tri[{output_label}]"
+        )
+        previous_label = output_label
+
+    command = ["ffmpeg", "-y"]
+    for path in input_paths:
+        command.extend(["-i", str(path)])
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            f"[{previous_label}]",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            str(output_path),
+        ]
+    )
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=900)
+    except FileNotFoundError as error:
+        raise RuntimeError("未找到 ffmpeg，请在 NAS 镜像或系统中安装 ffmpeg。") from error
+    if result.returncode != 0:
+        concat_audio_files(input_paths, output_path)
+
+
+def is_radio_voice_segment(path: Path) -> bool:
+    name = path.stem.lower()
+    return any(part in name for part in ("intro", "outro", "voice", "spoken"))
 
 
 def probe_audio_duration_seconds(path: Path) -> int:
@@ -2134,7 +2530,7 @@ def build_radio_mix_segments(
             "type": "intro",
             "id": f"radio_{episode_id}_intro",
             "title": "开场口播",
-            "artist": "MiniMax 电台主持",
+            "artist": "Migi",
             "audioPath": str(intro_path),
             "durationSeconds": probe_audio_duration_seconds(intro_path),
         }
@@ -2148,6 +2544,9 @@ def build_radio_mix_segments(
                 "artist": radio_artist_name(track),
                 "album": radio_album_name(track),
                 "sourcePath": str(track.get("sourcePath") or ""),
+                "coverArtUrl": str(track.get("coverArtUrl") or ""),
+                "lyrics": str(track.get("lyrics") or ""),
+                "reason": str(track.get("reason") or ""),
                 "durationSeconds": int(track.get("durationSeconds") or 0),
             }
         )
@@ -2156,7 +2555,7 @@ def build_radio_mix_segments(
             "type": "outro",
             "id": f"radio_{episode_id}_outro",
             "title": "结束口播",
-            "artist": "MiniMax 电台主持",
+            "artist": "Migi",
             "audioPath": str(outro_path),
             "durationSeconds": probe_audio_duration_seconds(outro_path),
         }
@@ -2176,6 +2575,60 @@ def build_radio_mix_segments(
 
 
 async def generate_minimax_tts(text: str) -> bytes:
+    return await generate_tts_audio(text)
+
+
+async def generate_tts_audio(text: str) -> bytes:
+    provider = resolved_tts_provider()
+    if provider == "fish":
+        return await generate_fish_tts(text)
+    if provider == "minimax":
+        return await generate_minimax_tts_legacy(text)
+    raise RuntimeError("TTS 未配置。")
+
+
+async def generate_fish_tts(text: str) -> bytes:
+    settings = get_settings()
+    if not settings.fish_api_key:
+        raise RuntimeError("Fish Audio TTS 未配置 FISH_API_KEY。")
+    payload = {
+        "text": text,
+        "format": "mp3",
+        "sample_rate": 44100,
+        "mp3_bitrate": 128,
+        "latency": "normal",
+        "normalize": True,
+        "prosody": {
+            "speed": 0.95,
+            "volume": 0,
+            "normalize_loudness": True,
+        },
+    }
+    if settings.fish_tts_reference_id:
+        payload["reference_id"] = settings.fish_tts_reference_id
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(240.0, connect=30.0)) as client:
+            response = await client.post(
+                "https://api.fish.audio/v1/tts",
+                headers={
+                    "Authorization": f"Bearer {settings.fish_api_key}",
+                    "Content-Type": "application/json",
+                    "model": settings.fish_tts_model,
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as error:
+        detail = str(error).strip() or repr(error)
+        raise RuntimeError(f"Fish Audio TTS 请求失败：{type(error).__name__}: {detail}") from error
+    if response.status_code >= 400:
+        raise RuntimeError(f"Fish Audio TTS HTTP {response.status_code}: {response.text[:300]}")
+    content_type = response.headers.get("content-type", "")
+    if "audio" not in content_type and not response.content:
+        raise RuntimeError("Fish Audio TTS 响应没有音频内容。")
+    return response.content
+
+
+async def generate_minimax_tts_legacy(text: str) -> bytes:
     settings = get_settings()
     minimax_key = resolved_minimax_key()
     if not minimax_key:
@@ -2225,6 +2678,19 @@ async def generate_minimax_tts(text: str) -> bytes:
 def resolved_minimax_key() -> str:
     settings = get_settings()
     return settings.minimax_subscription_key or settings.minimax_api_key
+
+
+def resolved_llm_key() -> str:
+    return get_settings().openai_compat_api_key
+
+
+def resolved_tts_provider() -> str:
+    settings = get_settings()
+    if settings.tts_provider == "fish" and settings.fish_api_key:
+        return "fish"
+    if settings.tts_provider == "minimax" and resolved_minimax_key() and settings.minimax_group_id:
+        return "minimax"
+    return "mock"
 
 
 def write_mock_radio_wav(path: Path, script: str) -> None:
@@ -2286,6 +2752,9 @@ def build_radio_segments(
                 "title": first_string_value(track, "title", "name") or "未知歌曲",
                 "artist": radio_artist_name(track),
                 "album": radio_album_name(track),
+                "coverArtUrl": str(track.get("coverArtUrl") or ""),
+                "lyrics": str(track.get("lyrics") or ""),
+                "reason": str(track.get("reason") or ""),
                 "durationSeconds": int(track.get("durationSeconds") or 0),
             }
         )
@@ -2315,6 +2784,7 @@ def estimate_audio_duration_seconds(path: Path, audio_format: str, script: str) 
 
 def radio_episode_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     episode_id = row["id"]
+    segments = json.loads(row["segments_json"] or "[]")
     return {
         "id": episode_id,
         "title": row["title"],
@@ -2326,7 +2796,8 @@ def radio_episode_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "durationSeconds": row["duration_seconds"],
         "outroDurationSeconds": row["outro_duration_seconds"],
         "sourceTrackIds": json.loads(row["source_track_ids_json"] or "[]"),
-        "segments": json.loads(row["segments_json"] or "[]"),
+        "segments": segments,
+        "playbackFlow": build_radio_playback_flow(segments),
         "generator": row["generator"],
         "streamUrl": f"/v1/music/radio/episodes/{episode_id}/stream",
         "outroStreamUrl": f"/v1/music/radio/episodes/{episode_id}/outro/stream"
@@ -2467,19 +2938,19 @@ async def classify_radio_chat_with_minimax(
     local_classification: dict[str, Any],
     chat_context: dict[str, Any],
 ) -> dict[str, Any]:
-    if not resolved_minimax_key() or not get_settings().minimax_group_id:
+    if not resolved_llm_key():
         return local_classification
     prompt = build_minimax_radio_chat_prompt(content, local_classification, chat_context)
     try:
-        result = await generate_minimax_chat_json(prompt)
+        result = await generate_llm_json(prompt)
     except Exception as error:
         fallback = dict(local_classification)
-        fallback["effectSummary"] = f"{fallback['effectSummary']} MiniMax M3 暂不可用，已使用本地规则兜底。"
+        fallback["effectSummary"] = f"{fallback['effectSummary']} 文本模型暂不可用，已使用本地规则兜底。"
         fallback["generator"] = "local-rules"
         fallback["aiError"] = str(error)
         return fallback
     merged = normalize_minimax_radio_chat_result(result, local_classification)
-    merged["generator"] = "minimax-m3"
+    merged["generator"] = f"{get_settings().llm_provider}-{get_settings().openai_compat_model}"
     return merged
 
 
@@ -2488,6 +2959,7 @@ def build_minimax_radio_chat_prompt(
     local_classification: dict[str, Any],
     chat_context: dict[str, Any],
 ) -> str:
+    persona_skill = load_radio_persona_skill()
     memories = chat_context.get("memories") or []
     messages = chat_context.get("messages") or []
     memory_lines = [
@@ -2501,9 +2973,13 @@ def build_minimax_radio_chat_prompt(
         if isinstance(item, dict)
     ]
     return (
-        "你是“沐音 FM”的私人 AI DJ，负责用自然、克制、像朋友一样的语气回复用户。\n"
+        "你是“沐音 FM”的私人 AI DJ。说话方式遵循下方电台人格技能，但不要自称原作角色。\n"
+        "电台人格技能：\n"
+        + (persona_skill or "- 使用克制、理性、私人化的中文 DJ 口吻。\n")
+        + "\n"
         "你还要判断这句话应该如何进入系统：当前电台指令、长期音乐偏好候选、普通聊天。\n"
         "不要装作已经真的切歌或播放，除非用户只是表达偏好；可说“我会把本期方向调成...”。\n"
+        "音乐建议仍以已确认长期偏好、最近对话、听歌记录为依据；不要因为人格技能虚构用户偏好。\n"
         "长期偏好必须是以后也有价值的信息，例如喜欢/不喜欢的歌手、曲风、场景规则、口播习惯。"
         "临时请求例如“今天、这期、现在、下一首”只作为 session_instruction。\n"
         "回复要短，20-70 个中文字符，不能像客服，不要说“已为您”。\n"
@@ -2562,9 +3038,9 @@ def normalize_minimax_radio_chat_result(
     effect_summary = str(result.get("effectSummary") or "").strip()
     if not effect_summary:
         effect_summary = {
-            "long_term_preference": "MiniMax M3 识别为长期音乐偏好候选，等待你确认是否记住。",
-            "session_instruction": "MiniMax M3 识别为当前电台指令，先影响本期电台上下文。",
-            "chat": "MiniMax M3 识别为普通聊天，暂时只保留在电台对话里。",
+            "long_term_preference": "文本模型识别为长期音乐偏好候选，等待你确认是否记住。",
+            "session_instruction": "文本模型识别为当前电台指令，先影响本期电台上下文。",
+            "chat": "文本模型识别为普通聊天，暂时只保留在电台对话里。",
         }[intent_type]
     return {
         "intentType": intent_type,
@@ -2601,49 +3077,6 @@ def build_radio_chat_reply(
     return "收到，我先记在这次电台对话里。你也可以直接说“以后记住……”来沉淀成长期偏好。"
 
 
-def radio_job_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "status": row["status"],
-        "mode": row["mode"],
-        "trackIds": json.loads(row["track_ids_json"] or "[]"),
-        "script": row["script"],
-        "episodeId": row["episode_id"],
-        "error": row["error"],
-        "createdAt": row["created_at"],
-        "updatedAt": row["updated_at"],
-    }
-
-
-async def build_daoliyu_track_stream_url(track_id: str) -> str:
-    token = await get_or_login_daoliyu_token()
-    if not token:
-        return ""
-    base_url = str(DAOLIYU_TOKEN_CACHE.get("baseUrl") or daoliyu_base_urls()[0])
-    return f"{base_url}/api/tracks/{track_id}/stream?token={token}"
-
-
-async def proxy_audio_url(url: str, request: Request) -> Response:
-    headers = {}
-    range_header = request.headers.get("range")
-    if range_header:
-        headers["Range"] = range_header
-    async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
-        upstream = await client.get(url, headers=headers)
-    response_headers = {
-        key: value
-        for key, value in upstream.headers.items()
-        if key.lower() in {"content-length", "content-range", "accept-ranges", "content-type"}
-    }
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=response_headers,
-        media_type=upstream.headers.get("content-type", "audio/mpeg"),
-    )
-
-
 def resolve_track_file_path(track: dict[str, Any]) -> Path | None:
     raw_file_path = first_string_value(track, "filePath", "path")
     if not raw_file_path:
@@ -2661,223 +3094,3 @@ def resolve_track_file_path(track: dict[str, Any]) -> Path | None:
     if not resolved.exists() or not resolved.is_file():
         return None
     return resolved
-
-
-def ranged_file_response(path: Path, request: Request) -> Response:
-    range_header = request.headers.get("range")
-    media_type = guess_audio_media_type(path)
-    if not range_header:
-        return FileResponse(path, media_type=media_type)
-
-    file_size = path.stat().st_size
-    byte_range = parse_range_header(range_header, file_size)
-    if byte_range is None:
-        return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
-
-    start, end = byte_range
-    length = end - start + 1
-
-    def iter_file():
-        with path.open("rb") as file:
-            file.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = file.read(min(1024 * 1024, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
-
-    return StreamingResponse(
-        iter_file(),
-        status_code=206,
-        media_type=media_type,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(length),
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-        },
-    )
-
-
-def parse_range_header(value: str, file_size: int) -> tuple[int, int] | None:
-    if not value.startswith("bytes="):
-        return None
-    start_text, _, end_text = value.removeprefix("bytes=").partition("-")
-    try:
-        if start_text:
-            start = int(start_text)
-            end = int(end_text) if end_text else file_size - 1
-        else:
-            suffix = int(end_text)
-            start = max(0, file_size - suffix)
-            end = file_size - 1
-    except ValueError:
-        return None
-    if start < 0 or end < start or start >= file_size:
-        return None
-    return start, min(end, file_size - 1)
-
-
-def first_string_value(source: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = source.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def guess_audio_media_type(path: Path) -> str:
-    suffix = path.suffix.lower()
-    return {
-        ".aac": "audio/aac",
-        ".flac": "audio/flac",
-        ".m4a": "audio/mp4",
-        ".mp3": "audio/mpeg",
-        ".ogg": "audio/ogg",
-        ".wav": "audio/wav",
-    }.get(suffix, "application/octet-stream")
-
-
-def daoliyu_base_urls() -> list[str]:
-    urls = [
-        value.strip().rstrip("/")
-        for value in get_settings().daoliyu_base_urls.split(",")
-        if value.strip()
-    ]
-    return urls or ["http://127.0.0.1:5173", "https://daoliyu.xuguopeng.com"]
-
-
-async def get_or_login_daoliyu_token() -> str:
-    token = str(DAOLIYU_TOKEN_CACHE.get("token") or "")
-    if token:
-        return token
-    result = await login_daoliyu()
-    if result["status"] != "authenticated":
-        return ""
-    return str(DAOLIYU_TOKEN_CACHE.get("token") or "")
-
-
-async def login_daoliyu() -> dict[str, Any]:
-    settings = get_settings()
-    errors: list[dict[str, str]] = []
-    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-        for base_url in daoliyu_base_urls():
-            login_url = f"{base_url}/api/auth/login"
-            try:
-                response = await client.post(
-                    login_url,
-                    json={
-                        "email": settings.daoliyu_username,
-                        "username": settings.daoliyu_username,
-                        "password": settings.daoliyu_password,
-                    },
-                )
-            except httpx.HTTPError as error:
-                errors.append({"target": login_url, "message": str(error)})
-                continue
-            if response.status_code >= 500:
-                errors.append({"target": login_url, "message": f"HTTP {response.status_code}"})
-                continue
-            if response.status_code >= 400:
-                return {
-                    "status": "error",
-                    "baseUrl": base_url,
-                    "message": f"倒流登录失败：HTTP {response.status_code}",
-                }
-            payload = response.json()
-            token = payload.get("access_token") or payload.get("token") or ""
-            if not token:
-                return {
-                    "status": "error",
-                    "baseUrl": base_url,
-                    "message": "倒流登录响应没有 token。",
-                }
-            DAOLIYU_TOKEN_CACHE.update(
-                {
-                    "token": token,
-                    "baseUrl": base_url,
-                    "user": payload.get("user"),
-                }
-            )
-            return {
-                "status": "authenticated",
-                "baseUrl": base_url,
-                "user": payload.get("user"),
-                "message": "倒流音乐服务已登录。",
-            }
-    return {
-        "status": "error",
-        "baseUrl": "",
-        "errors": errors,
-        "message": "倒流登录失败：所有上游都不可达。",
-    }
-
-
-async def fetch_daoliyu_profile() -> dict[str, Any]:
-    token = str(DAOLIYU_TOKEN_CACHE.get("token") or "")
-    base_url = str(DAOLIYU_TOKEN_CACHE.get("baseUrl") or daoliyu_base_urls()[0])
-    try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
-            response = await client.get(
-                f"{base_url}/api/auth/profile",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as error:
-        return {
-            "status": "error",
-            "baseUrl": base_url,
-            "message": f"倒流 profile 检测失败：{error}",
-        }
-    if response.status_code == 401:
-        return {
-            "status": "not_authenticated",
-            "baseUrl": base_url,
-            "message": "倒流 token 已失效。",
-        }
-    if response.status_code >= 400:
-        return {
-            "status": "error",
-            "baseUrl": base_url,
-            "message": f"倒流 profile 返回 HTTP {response.status_code}",
-        }
-    user = response.json()
-    DAOLIYU_TOKEN_CACHE["user"] = user
-    return {
-        "status": "authenticated",
-        "baseUrl": base_url,
-        "user": user,
-        "message": "倒流音乐服务已登录。",
-    }
-
-
-def safe_auth_status(result: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "status": result.get("status", "unknown"),
-        "configured": bool(get_settings().daoliyu_username and get_settings().daoliyu_password),
-        "secretFilesLoaded": len(get_settings().loaded_secret_files),
-        "baseUrl": result.get("baseUrl") or DAOLIYU_TOKEN_CACHE.get("baseUrl") or "",
-        "user": result.get("user") or DAOLIYU_TOKEN_CACHE.get("user"),
-        "message": result.get("message", ""),
-    }
-
-
-def should_auto_attach_token(target_path: str, headers: dict[str, str]) -> bool:
-    if any(key.lower() == "authorization" for key in headers):
-        return False
-    return target_path not in {
-        "/api/auth/bootstrap",
-        "/api/auth/bootstrap-admin",
-        "/api/auth/login",
-    }
-
-
-def normalize_proxy_path(full_path: str) -> str:
-    stripped = full_path.strip("/")
-    if not stripped:
-        return "/api/auth/bootstrap"
-    if stripped.startswith("static/"):
-        return f"/{stripped}"
-    if stripped.startswith("api/"):
-        return f"/{stripped}"
-    return f"/api/{stripped}"

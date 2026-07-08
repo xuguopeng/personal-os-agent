@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   music-server:
     build:
@@ -10,23 +12,38 @@ services:
       AGENT_SERVER_DB_PATH: /data/personal-os-agent-server.sqlite3
       AGENT_SERVER_BIND_HOST: 0.0.0.0
       AGENT_SERVER_PORT: "8088"
-      DAOLIYU_BASE_URLS: http://host.docker.internal:5173,https://daoliyu.xuguopeng.com
       DAOLIYU_MEDIA_ROOT: /data/media/daoliyu
       MUSIC_LIBRARY_ROOTS: /data/media/daoliyu,/data/media/sqmusic,/data/media/local
+      MUSIC_COVER_DIR: /data/covers
       RADIO_OUTPUT_DIR: /data/radio
-      MINIMAX_CHAT_MODEL: MiniMax-M3
-      MINIMAX_TTS_MODEL: speech-2.8-hd
-      MINIMAX_TTS_VOICE_ID: male-qn-jingying
+      LLM_PROVIDER: "0029"
+      OPENAI_COMPAT_BASE_URL: https://api.0029.org/v1
+      OPENAI_COMPAT_MODEL: gpt-5.5
+      TTS_PROVIDER: fish
+      FISH_TTS_MODEL: s2.1-pro-free
+      FISH_TTS_REFERENCE_ID: c43ae8e1c3664eac9203f9293fabc3c9
       RADIO_DAILY_ENABLED: "true"
-      RADIO_DAILY_TIME: "07:30"
+      RADIO_DAILY_TIME: "07:00"
       RADIO_DAILY_TIMEZONE: Asia/Shanghai
       RADIO_WEATHER_CITY: 陕西西安
       RADIO_WEATHER_LAT: "34.3416"
       RADIO_WEATHER_LON: "108.9398"
       RADIO_RECENT_LIMIT: "30"
+      MISSING_DOWNLOAD_ENABLED: "true"
+      MISSING_DOWNLOAD_START_HOUR: "7"
+      MISSING_DOWNLOAD_END_HOUR: "20"
+      MISSING_DOWNLOAD_INTERVAL_HOURS: "2"
+      MISSING_DOWNLOAD_BATCH_SIZE: "20"
+      SQMUSIC_BASE_URL: http://192.168.10.21:8096
+      SQMUSIC_PLUG_NAMES: kw,qq,netease,kg,mg
+      HTTP_PROXY: http://192.168.10.4:7897
+      HTTPS_PROXY: http://192.168.10.4:7897
+      NO_PROXY: ${NO_PROXY:-127.0.0.1,localhost,192.168.10.21,host.docker.internal}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - /volume1/docker/personal-os-agent/data:/data
+      - /volume1/docker/mu-music/data:/data
       - /volume1/media/音乐:/data/media/daoliyu
       - /volume1/docker/sqmusic/file:/data/media/sqmusic
+      - ./services/agent-server/private_plugins:/data/private_plugins/music_metadata:ro
+      - ./services/agent-server/private_plugins:/data/private_plugins/music_sources:ro

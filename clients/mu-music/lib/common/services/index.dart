@@ -7,3 +7,5 @@
  * 在这个虚拟的空间里，我试图捕捉真实的自我，与世界分享。
  */
 library;
+
+export 'client_config.dart';

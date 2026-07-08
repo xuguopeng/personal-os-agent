@@ -46,11 +46,15 @@ Environment variables:
 - `DAOLIYU_PASSWORD`: optional Daoliyu password for server-side login. Do not commit this value.
 - `MUSIC_LIBRARY_ROOTS`: comma-separated local music folders scanned by the built-in NAS music service. Default `/data/media`.
 - `MUSIC_COVER_DIR`: extracted embedded cover cache. Default `/data/covers`.
-- `MINIMAX_SUBSCRIPTION_KEY`: MiniMax Token Plan subscription key for radio TTS. Preferred over `MINIMAX_API_KEY`.
-- `MINIMAX_API_KEY`: MiniMax pay-as-you-go API key fallback. Token Plan keys and pay-as-you-go keys are not interchangeable.
-- `MINIMAX_GROUP_ID`: MiniMax group ID used by the TTS endpoint.
-- `MINIMAX_TTS_MODEL`: MiniMax speech model. Default `speech-2.8-hd`.
-- `MINIMAX_TTS_VOICE_ID`: MiniMax voice ID. Default `male-qn-jingying`.
+- `LLM_PROVIDER`: text-generation provider label. Default `0029`.
+- `OPENAI_COMPAT_BASE_URL`: OpenAI-compatible gateway base URL. Default `https://api.0029.org/v1`.
+- `OPENAI_COMPAT_API_KEY`: 0029 API key for `/v1/responses` chat, DJ planning, and radio copywriting. Do not commit this value.
+- `OPENAI_COMPAT_MODEL`: model name routed through 0029. Default `gpt-5.5`.
+- `TTS_PROVIDER`: spoken-segment provider. Default `fish`.
+- `FISH_API_KEY`: Fish Audio API key for DJ spoken segments. Do not commit this value.
+- `FISH_TTS_MODEL`: Fish Audio TTS model. Default `s2.1-pro-free`.
+- `FISH_TTS_REFERENCE_ID`: fixed Fish `reference_id` / voice model id for all Migi spoken segments. Default `c43ae8e1c3664eac9203f9293fabc3c9`.
+- `MINIMAX_*`: legacy fallback fields only; the current DJ workflow does not require MiniMax.
 - `RADIO_OUTPUT_DIR`: generated radio audio directory. Default `/data/radio`.
 - `LISTENING_PLUGIN_DIRS`: comma-separated private listening-source plugin directories. Default `/data/private_plugins/music_sources,./services/agent-server/private_plugins,./private_plugins`.
 - `METADATA_PLUGIN_DIRS`: comma-separated private metadata scraper plugin directories. Default `/data/private_plugins/music_metadata,./services/agent-server/private_plugins,./private_plugins`.
@@ -71,10 +75,13 @@ AGENT_SERVER_PASSWORD=your-long-password
 DAOLIYU_MEDIA_ROOT=/data/media/daoliyu
 MUSIC_LIBRARY_ROOTS=/data/media/daoliyu,/data/media/sqmusic,/data/media/local
 MUSIC_COVER_DIR=/data/covers
-MINIMAX_SUBSCRIPTION_KEY=your-token-plan-subscription-key
-MINIMAX_GROUP_ID=your-minimax-group-id
-MINIMAX_TTS_MODEL=speech-2.8-hd
-MINIMAX_TTS_VOICE_ID=male-qn-jingying
+LLM_PROVIDER=0029
+OPENAI_COMPAT_BASE_URL=https://api.0029.org/v1
+OPENAI_COMPAT_API_KEY=your-0029-api-key
+OPENAI_COMPAT_MODEL=gpt-5.5
+TTS_PROVIDER=fish
+FISH_API_KEY=your-fish-audio-key
+FISH_TTS_MODEL=s2.1-pro-free
 RADIO_OUTPUT_DIR=/data/radio
 LISTENING_PLUGIN_DIRS=/data/private_plugins/music_sources,./services/agent-server/private_plugins,./private_plugins
 METADATA_PLUGIN_DIRS=/data/private_plugins/music_metadata,./services/agent-server/private_plugins,./private_plugins
@@ -227,18 +234,153 @@ sqmusic download bridge:
   after downloads finish. When enabled, it starts a QQ Music metadata scrape job
   only for missing lyrics and covers.
 
-Daily radio mix:
+Daily radio:
 
-- `POST /v1/music/radio/daily/build` creates a full mixed radio episode:
-  MiniMax chat script -> MiniMax TTS intro -> local music files -> MiniMax TTS
-  outro -> ffmpeg merged MP3.
+- `GET /v1/dj/today?autoBuild=true` is the preferred client path. It creates a
+  Claudio/mmguo-style episode made of playable segments: spoken intro -> songs
+  -> next spoken intro -> songs -> outro.
+- `POST /v1/music/radio/daily/build` remains as a legacy compatibility endpoint.
 - The script uses the current date, Xi'an weather, local/recent playback
-  history, and configured MiniMax credentials.
+  history, the configured 0029 text model, and Fish Audio spoken segments.
 - If the generated recommendation is missing locally, the server attempts a
   sqmusic download, rescans the local library, then starts a QQ Music metadata
   scrape job for missing lyrics/covers.
 - The Docker image installs `ffmpeg`; custom deployments must also provide
   `ffmpeg` and `ffprobe` on PATH.
+
+## Claudio-Style DJ Agent
+
+The service also exposes a higher-level DJ agent protocol through `/v1/dj`.
+This layer keeps the older `/v1/music/radio/*` endpoints working, but adds a
+Claudio-style flow:
+
+- profile documents: `taste.md`, `routines.md`, and `mood-rules.md`
+- persona skill: the bundled Migi-inspired rational DJ voice
+- context window: profile docs, weather, listening profile, recent tracks,
+  remembered preferences, recent chat, and execution trace
+- structured plan: `say`, `play`, `reason`, `segue`, and optional
+  `memoryCandidate`
+- playback bridge: episode building returns queue segments. Spoken segments use
+  Fish Audio; music segments point to local NAS tracks. It no longer needs to
+  merge every song and spoken segment into one long file.
+- daily auto-play shape: one episode per day, generated at 07:00, with morning,
+  noon/afternoon, and night sections; each section has its own spoken intro and
+  three songs
+
+Deployment probe:
+
+```text
+GET /version
+```
+
+`/version` is intentionally public and does not require Basic Auth. It returns
+the current service version and feature flags, for example `v0.3` and
+`features.dj=true`. Use it after NAS redeploys to confirm that the running
+container is the new image before testing protected `/v1/*` endpoints.
+
+Useful endpoints:
+
+```text
+GET  /v1/dj/status
+GET  /v1/dj/profile
+GET  /v1/dj/context?message=...
+GET  /v1/dj/today
+POST /v1/dj/profile/intake
+POST /v1/dj/chat
+POST /v1/dj/plan/today
+POST /v1/dj/plan/from-message
+POST /v1/dj/episode/build
+GET  /v1/dj/plans
+GET  /v1/dj/missing-tracks
+POST /v1/dj/missing-tracks/process
+```
+
+`GET /v1/dj/today` returns today's generated radio episode. Use
+`autoBuild=true` if the client should build today's episode on first launch when
+the 07:00 scheduler has not run yet. The generated episode is a full-day queue:
+morning 3 songs, noon/afternoon 3 songs, night 3 songs, and spoken DJ intros for
+each section. Clients should play `segments` in order.
+
+Daily generation data is persisted in SQLite:
+
+- `radio_daily_generations`: one row per day, keyed by `episode_date`.
+- `radio_daily_tracks`: the exact songs, stage, order, and recommendation
+  reasons used that day.
+- `radio_spoken_segments`: spoken copy, Fish Audio output path, model, format,
+  and duration for each intro/outro.
+- generated spoken audio files use the readable base name
+  `migi-YYYY-MM-DD`, for example `migi-2026-07-07-morning-intro.mp3`.
+
+The memory model is mixed on purpose: tables store facts and queryable history,
+while `dj_profile_documents` stores human-readable profile summaries such as
+`taste.md`, `routines.md`, and `mood-rules.md`. Chat can create memory
+candidates; replying `记住` promotes the latest candidate into long-term memory
+and appends it to the matching profile document. Replying `这次有效` keeps it
+session-only, and `忽略` discards it.
+
+`POST /v1/dj/profile/intake` accepts one batch of answers for favorite artists,
+disliked styles, work music, morning/afternoon/night preferences, weather rules,
+and DJ speaking style. The answers update the profile documents and are included
+in later context windows. The default bundled profile is personal and currently
+prefers Jay Chou, Beyond, weather-aware selection, and a not-too-long
+Claudio-style spoken intro. The daily playlist is split into three sections with
+three tracks per section.
+
+Legacy mix tuning for `/v1/music/radio/daily/build`:
+
+```env
+RADIO_MIX_CROSSFADE_SECONDS=2.5
+RADIO_MIX_DUCKING_VOLUME=0.18
+RADIO_MIX_MUSIC_VOLUME=0.92
+```
+
+`POST /v1/dj/chat` returns a playback action so clients can execute music from
+chat:
+
+```json
+{
+  "reply": "...",
+  "action": {
+    "type": "play_episode | play_tracks | build_and_play_today | none",
+    "status": "ready",
+    "episode": {"streamUrl": "/v1/music/radio/episodes/.../stream"},
+    "tracks": [{"streamUrl": "/v1/music/audio/..."}]
+  }
+}
+```
+
+Client behavior:
+
+- `play_episode`: play `episode.streamUrl` directly.
+- `play_tracks`: replace the local queue with local-library `tracks` and start playback.
+- `build_and_play_today`: call `GET /v1/dj/today?autoBuild=true`, then play the
+  returned episode.
+- `none`: keep the response as chat only.
+
+Chat playback actions intentionally do not block on sqmusic downloads. If a
+single-track request cannot be matched in the local library, the server falls
+back to `build_and_play_today`; explicit download workflows should use the
+download endpoints.
+
+Missing-track queue:
+
+- Recommendations that cannot be matched locally are saved to
+  `music_missing_track_queue`.
+- The global scheduler processes this queue every two hours from 07:00 to 20:00
+  local time, with a five-minute startup grace window.
+- Processing first rescans the local library, matches already-downloaded songs,
+  then submits still-missing songs to sqmusic. After processing it rescans again
+  and starts QQ Music metadata scraping for missing lyrics/covers.
+- Use `GET /v1/dj/missing-tracks` to inspect the queue.
+- Use `POST /v1/dj/missing-tracks/process?limit=20` to run one batch manually.
+
+```env
+MISSING_DOWNLOAD_ENABLED=true
+MISSING_DOWNLOAD_START_HOUR=7
+MISSING_DOWNLOAD_END_HOUR=20
+MISSING_DOWNLOAD_INTERVAL_HOURS=2
+MISSING_DOWNLOAD_BATCH_SIZE=20
+```
 
 ## Daoliyu Music Proxy
 

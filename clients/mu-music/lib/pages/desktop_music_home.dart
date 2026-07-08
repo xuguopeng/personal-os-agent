@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
@@ -11,6 +14,7 @@ part 'desktop_music/desktop_music_models.dart';
 part 'desktop_music/desktop_music_background.dart';
 part 'desktop_music/desktop_music_reference_widgets.dart';
 part 'desktop_music/desktop_music_library_widgets.dart';
+part 'desktop_music/desktop_music_vertical_shell.dart';
 
 enum _VerticalDjPanel { chat, player, profile }
 
@@ -27,6 +31,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       TextEditingController();
   final TextEditingController _radioChatController = TextEditingController();
   final ScrollController _radioChatScrollController = ScrollController();
+  final ScrollController _fallbackLyricScrollController = ScrollController();
   final GetStorage _storage = GetStorage();
   final PlaylistStore _playlistStore = Get.find<PlaylistStore>();
   final GlobalMusicController _musicController =
@@ -61,6 +66,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   void initState() {
     super.initState();
     _loadFavorites();
+    _loadFavoritesFromServer();
     _loadPlaybackHistory();
     _loadTracks();
     _loadRadioStatus();
@@ -75,7 +81,13 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     _downloadSearchController.dispose();
     _radioChatController.dispose();
     _radioChatScrollController.dispose();
+    _fallbackLyricScrollController.dispose();
     super.dispose();
+  }
+
+  void _setVerticalPanel(_VerticalDjPanel panel) {
+    if (!mounted) return;
+    setState(() => _verticalPanel = panel);
   }
 
   Future<void> _loadTracks([String keyword = '']) async {
@@ -84,7 +96,6 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       _error = null;
     });
     try {
-      await NasMusicApi.login();
       final tracks = await NasMusicApi.listTracks(
         keyword: keyword,
         limit: 80,
@@ -94,9 +105,6 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
         _tracks = tracks;
         _loading = false;
       });
-      if (_globalPlayerStore.currentTrack == null && tracks.isNotEmpty) {
-        _globalPlayerStore.setCurrentTrack(tracks.first);
-      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -112,28 +120,315 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     _favoriteTrackIds = stored.map((item) => item.toString()).toSet();
   }
 
+  Future<void> _loadFavoritesFromServer() async {
+    try {
+      final tracks = await NasMusicApi.listFavoriteTracks();
+      if (!mounted) return;
+      final ids = tracks.map((track) => track['id']?.toString() ?? '').where(
+            (id) => id.isNotEmpty,
+          );
+      setState(() {
+        _favoriteTrackIds = ids.toSet();
+        _mergeTracksFromServer(tracks);
+      });
+      _storage.write('desktop_favorite_track_ids', _favoriteTrackIds.toList());
+    } catch (_) {
+      // Keep local fallback; NAS may be unavailable during startup.
+    }
+  }
+
   void _loadPlaybackHistory() {
     final stored =
         _storage.read<List<dynamic>>('desktop_play_history_ids') ?? [];
     _playHistoryIds = stored.map((item) => item.toString()).toList();
   }
 
-  void _toggleFavorite(Map<String, dynamic> track) {
+  Future<void> _toggleFavorite(Map<String, dynamic> track) async {
     final id = track['id']?.toString() ?? '';
     if (id.isEmpty) return;
+    final nextLiked = !_favoriteTrackIds.contains(id);
     setState(() {
-      if (_favoriteTrackIds.contains(id)) {
-        _favoriteTrackIds.remove(id);
-      } else {
+      if (nextLiked) {
         _favoriteTrackIds.add(id);
+      } else {
+        _favoriteTrackIds.remove(id);
       }
+      _setTrackFavoriteFlag(id, nextLiked);
     });
     _storage.write('desktop_favorite_track_ids', _favoriteTrackIds.toList());
+    try {
+      await NasMusicApi.setFavoriteTrack(trackId: id, liked: nextLiked);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        if (nextLiked) {
+          _favoriteTrackIds.remove(id);
+        } else {
+          _favoriteTrackIds.add(id);
+        }
+        _setTrackFavoriteFlag(id, !nextLiked);
+        _radioError = '喜欢状态同步失败：$error';
+      });
+      _storage.write('desktop_favorite_track_ids', _favoriteTrackIds.toList());
+    }
+  }
+
+  void _setTrackFavoriteFlag(String id, bool favorite) {
+    _tracks = _tracks.map((item) {
+      if (item['id']?.toString() != id) return item;
+      return {...item, 'favorite': favorite};
+    }).toList();
+    final current = _globalPlayerStore.currentTrack;
+    if (current != null && current['id']?.toString() == id) {
+      _globalPlayerStore.setCurrentTrack({...current, 'favorite': favorite});
+    }
+  }
+
+  void _mergeTracksFromServer(List<Map<String, dynamic>> tracks) {
+    if (tracks.isEmpty) return;
+    final byId = {
+      for (final track in _tracks) track['id']?.toString() ?? '': track,
+    };
+    for (final track in tracks) {
+      final id = track['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      byId[id] = {
+        ...?byId[id],
+        ...track,
+        'favorite': true,
+      };
+    }
+    _tracks = byId.values.where((track) {
+      return (track['id']?.toString() ?? '').isNotEmpty;
+    }).toList();
+  }
+
+  List<Map<String, dynamic>> _dedupeTracksById(
+    List<Map<String, dynamic>> tracks,
+  ) {
+    final seen = <String>{};
+    final result = <Map<String, dynamic>>[];
+    for (final track in tracks) {
+      final id = track['id']?.toString() ?? '';
+      final key = id.isNotEmpty
+          ? id
+          : [
+              track['name'],
+              track['title'],
+              _verticalArtistName(track),
+              track['url'],
+            ].join('|');
+      if (key.trim().isEmpty || seen.contains(key)) continue;
+      seen.add(key);
+      result.add(track);
+    }
+    return result;
+  }
+
+  Future<void> _playTrackList(
+    List<Map<String, dynamic>> tracks, {
+    int startIndex = 0,
+    bool replace = true,
+  }) async {
+    final playlist = _dedupeTracksById(tracks);
+    if (playlist.isEmpty) return;
+    final index = startIndex.clamp(0, playlist.length - 1);
+    _musicController.suppressPlaylistAutoLoad();
+    if (replace) {
+      _playlistStore.setCurrentPlaylist(playlist, startIndex: index);
+    } else {
+      _playlistStore.setCurrentPlaylist(playlist, startIndex: index);
+    }
+    final track = playlist[index];
+    _globalPlayerStore.setCurrentTrack(track);
+    _addPlaybackHistory(track);
+    await _musicController.initMusicData(track);
+  }
+
+  Future<void> _showVerticalFavoritesSheet() async {
+    List<Map<String, dynamic>> tracks = [];
+    try {
+      tracks = await NasMusicApi.listFavoriteTracks();
+      if (!mounted) return;
+      setState(() {
+        _favoriteTrackIds = tracks
+            .map((track) => track['id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        _mergeTracksFromServer(tracks);
+      });
+      _storage.write('desktop_favorite_track_ids', _favoriteTrackIds.toList());
+    } catch (_) {
+      tracks = _tracks
+          .where((track) => _favoriteTrackIds.contains(track['id']?.toString()))
+          .toList();
+    }
+    tracks = _dedupeTracksById(tracks);
+    if (!mounted) return;
+    await _showTrackListSheet(
+      title: '喜欢的歌曲',
+      tracks: tracks,
+      emptyText: '还没有喜欢的歌曲',
+      showPlayAll: tracks.isNotEmpty,
+      onPlayAll: () async {
+        Navigator.of(context).pop();
+        await _playTrackList(tracks, startIndex: 0);
+      },
+      onPlayTrack: (track, index) async {
+        Navigator.of(context).pop();
+        await _playTrackList(tracks, startIndex: index);
+      },
+    );
+  }
+
+  Future<void> _showVerticalPlaylistSheet() async {
+    final playlist = _dedupeTracksById(_playlistStore.currentPlaylist);
+    await _showTrackListSheet(
+      title: '当前播放列表',
+      tracks: playlist,
+      emptyText: '当前播放列表为空',
+      showPlayAll: false,
+      onPlayTrack: (track, index) async {
+        Navigator.of(context).pop();
+        await _playTrackList(playlist, startIndex: index);
+      },
+    );
+  }
+
+  Future<void> _showTrackListSheet({
+    required String title,
+    required List<Map<String, dynamic>> tracks,
+    required String emptyText,
+    required Future<void> Function(Map<String, dynamic> track, int index)
+        onPlayTrack,
+    bool showPlayAll = false,
+    Future<void> Function()? onPlayAll,
+  }) async {
+    final displayTracks = _dedupeTracksById(tracks);
+    final textColor = AppColors.isDark ? Colors.white : Color(0xFF111827);
+    final muted = AppColors.isDark
+        ? Colors.white.withValues(alpha: 0.52)
+        : Color(0xFF111827).withValues(alpha: 0.52);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          margin: EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 12),
+          constraints: BoxConstraints(maxHeight: 420),
+          decoration: BoxDecoration(
+            color: AppColors.isDark
+                ? Color(0xFF07090D).withValues(alpha: 0.96)
+                : Colors.white.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: AppColors.isDark
+                  ? Colors.white.withValues(alpha: 0.10)
+                  : Color(0xFF111827).withValues(alpha: 0.10),
+            ),
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$title  ${displayTracks.length} 首',
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        fontFamily: 'LXGWWenKai',
+                      ),
+                    ),
+                  ),
+                  if (showPlayAll && onPlayAll != null)
+                    TextButton.icon(
+                      onPressed: onPlayAll,
+                      icon: Icon(Icons.play_arrow_rounded, size: 16),
+                      label: Text('播放全部'),
+                    ),
+                ],
+              ),
+              SizedBox(height: 10),
+              Expanded(
+                child: displayTracks.isEmpty
+                    ? Center(
+                        child: Text(
+                          emptyText,
+                          style: TextStyle(
+                            color: muted,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: displayTracks.length,
+                        separatorBuilder: (_, __) => Divider(
+                          height: 1,
+                          color: muted.withValues(alpha: 0.16),
+                        ),
+                        itemBuilder: (context, index) {
+                          final track = displayTracks[index];
+                          final title = _verticalTrackTitle(track);
+                          final artist = _verticalArtistName(track);
+                          final isCurrent = _globalPlayerStore
+                                  .currentTrack?['id']
+                                  ?.toString() ==
+                              track['id']?.toString();
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(
+                              isCurrent
+                                  ? Icons.volume_up_rounded
+                                  : Icons.music_note_rounded,
+                              color: isCurrent ? AppColors.primaryBtn : muted,
+                            ),
+                            title: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: isCurrent
+                                    ? AppColors.primaryBtn
+                                    : textColor,
+                                fontWeight: FontWeight.w900,
+                                fontFamily: 'LXGWWenKai',
+                              ),
+                            ),
+                            subtitle: Text(
+                              artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: muted),
+                            ),
+                            onTap: () => onPlayTrack(track, index),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _playTrack(Map<String, dynamic> track, int index) async {
-    final playlist = _visibleTracks();
-    _playlistStore.setCurrentPlaylist(playlist, startIndex: index);
+    final playlist = _dedupeTracksById(_visibleTracks());
+    if (playlist.isEmpty) return;
+    final trackId = track['id']?.toString() ?? '';
+    final startIndex = trackId.isEmpty
+        ? index.clamp(0, playlist.length - 1).toInt()
+        : playlist.indexWhere((item) => item['id']?.toString() == trackId);
+    final safeIndex = startIndex < 0
+        ? index.clamp(0, playlist.length - 1).toInt()
+        : startIndex;
+    _musicController.suppressPlaylistAutoLoad();
+    _playlistStore.setCurrentPlaylist(playlist, startIndex: safeIndex);
     _globalPlayerStore.setCurrentTrack(track);
     _addPlaybackHistory(track);
     await _musicController.initMusicData(track);
@@ -158,7 +453,11 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       _radioError = null;
     });
     try {
-      final episodes = await NasMusicApi.listRadioEpisodes();
+      final status = await NasMusicApi.getDjToday(autoBuild: false);
+      final episode = status['episode'];
+      final episodes = episode is Map
+          ? [Map<String, dynamic>.from(episode)]
+          : <Map<String, dynamic>>[];
       if (!mounted) return;
       setState(() {
         _radioEpisodes = episodes;
@@ -175,7 +474,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   Future<void> _loadRadioStatus() async {
     try {
-      final status = await NasMusicApi.getRadioStatus();
+      final status = await NasMusicApi.getDjStatus();
       if (!mounted) return;
       setState(() => _radioStatus = status);
     } catch (_) {
@@ -186,9 +485,30 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   Future<void> _loadDailyRadioStatus() async {
     try {
-      final status = await NasMusicApi.getDailyRadioStatus();
+      final status = await NasMusicApi.getDjToday(autoBuild: true);
+      final episode = status['episode'];
       if (!mounted) return;
-      setState(() => _dailyRadioStatus = status);
+      if (status['status']?.toString() == 'error') {
+        setState(() {
+          _dailyRadioStatus = status;
+          _radioError = status['message']?.toString() ?? '今日电台生成失败';
+        });
+        return;
+      }
+      setState(() {
+        _dailyRadioStatus = status;
+        if (episode is Map) {
+          final normalized = Map<String, dynamic>.from(episode);
+          final id = normalized['id']?.toString() ?? '';
+          _radioEpisodes = [
+            normalized,
+            ..._radioEpisodes.where((item) => item['id']?.toString() != id),
+          ];
+        }
+      });
+      if (episode is Map && _shouldAutoPlayDailyRadio(episode)) {
+        await _playRadioEpisode(Map<String, dynamic>.from(episode));
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _dailyRadioStatus = null);
@@ -197,7 +517,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   Future<void> _loadRadioChat() async {
     try {
-      final result = await NasMusicApi.getRadioChat();
+      final result = await NasMusicApi.getDjChat();
       final messages = result['messages'];
       final memories = result['memories'];
       if (!mounted) return;
@@ -208,6 +528,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
                 .map((item) => Map<String, dynamic>.from(item))
                 .toList()
             : [];
+        _sortRadioChatMessages();
         _radioMemories = memories is List
             ? memories
                 .whereType<Map>()
@@ -222,27 +543,105 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     }
   }
 
-  Future<void> _sendRadioChat() async {
-    final content = _radioChatController.text.trim();
+  bool _shouldAutoPlayDailyRadio(dynamic episode) {
+    if (_musicController.isPlaying) return false;
+    if (_musicController.currentMusic == null) return true;
+    if (episode is! Map) return false;
+    final episodeId = episode['id']?.toString() ?? '';
+    if (episodeId.isEmpty) return true;
+    final currentEpisodeId =
+        _globalPlayerStore.currentTrack?['radioEpisodeId']?.toString() ??
+            _playlistStore.currentTrack?['radioEpisodeId']?.toString() ??
+            '';
+    return currentEpisodeId != episodeId;
+  }
+
+  final List<TextInputFormatter> _radioChatInputFormatters = [
+    FilteringTextInputFormatter.deny(RegExp(r'[┤├]')),
+  ];
+
+  String _cleanRadioChatText(String value) {
+    return value
+        .replaceAll(RegExp(r'[┤├]'), '')
+        .replaceAll(RegExp(r'[\u0000-\u0008\u000B\u000C\u000E-\u001F]'), '')
+        .trim();
+  }
+
+  String _friendlyDjError(Object error) {
+    if (error is DioException) {
+      switch (error.type) {
+        case DioExceptionType.connectionError:
+          return '发送给 Migi 失败：连接不上 NAS 服务。请确认 NAS 服务已启动，或当前网络能访问 192.168.10.21 / os.xuguopeng.com。';
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.receiveTimeout:
+        case DioExceptionType.sendTimeout:
+          return '发送给 Migi 失败：NAS 响应超时，稍后再试。';
+        case DioExceptionType.badResponse:
+          final statusCode = error.response?.statusCode;
+          if (statusCode == 401) {
+            return '发送给 Migi 失败：NAS 账号密码校验失败。';
+          }
+          return '发送给 Migi 失败：NAS 返回异常${statusCode == null ? '' : '（$statusCode）'}。';
+        default:
+          return '发送给 Migi 失败：网络请求异常。';
+      }
+    }
+    return '发送给 Migi 失败：$error';
+  }
+
+  Future<void> _sendRadioChat([String? submittedText]) async {
+    final content =
+        _cleanRadioChatText(submittedText ?? _radioChatController.text);
     if (content.isEmpty || _radioChatSending) return;
-    _radioChatController.clear();
+    FocusManager.instance.primaryFocus?.unfocus();
+    Future<void>.delayed(const Duration(milliseconds: 80), () {
+      if (!mounted) return;
+      _radioChatController.value = const TextEditingValue();
+    });
     setState(() {
       _radioChatSending = true;
       _radioError = null;
+      final now = DateTime.now().millisecondsSinceEpoch;
       _radioChatMessages = [
         ..._radioChatMessages,
         {
-          'id': 'local_${DateTime.now().millisecondsSinceEpoch}',
+          'id': 'local_$now',
           'role': 'user',
           'content': content,
           'intentType': 'sending',
           'effectSummary': '正在发送给私人 DJ...',
+          'clientOrder': now,
         },
       ];
+      _sortRadioChatMessages();
     });
     _scrollRadioChatToBottom();
     try {
       final result = await NasMusicApi.sendRadioChat(content);
+      final reply = result['reply']?.toString() ?? '';
+      final action = result['action'];
+      await _handleDjAction(action);
+      Future<void>.microtask(() => _playDjSpoken(result['spoken']));
+      if (reply.isNotEmpty && mounted) {
+        setState(() {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          _radioChatMessages = [
+            ..._radioChatMessages,
+            {
+              'id': 'local_reply_$now',
+              'role': 'assistant',
+              'content': _djReplyText(reply, action),
+              'intentType': 'dj_chat',
+              'effectSummary': action is Map
+                  ? action['type']?.toString() ?? 'DJ 已生成播放动作'
+                  : 'DJ 已回复',
+              'clientOrder': now,
+            },
+          ];
+          _sortRadioChatMessages();
+        });
+        _scrollRadioChatToBottom();
+      }
       await _loadRadioChat();
       final candidate = result['memoryCandidate'];
       if (candidate is Map && mounted) {
@@ -259,11 +658,137 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       }
     } catch (error) {
       if (!mounted) return;
-      setState(() => _radioError = '发送给私人 DJ 失败：$error');
+      final message = _friendlyDjError(error);
+      setState(() {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        _radioError = message;
+        _radioChatMessages = [
+          ..._radioChatMessages,
+          {
+            'id': 'local_error_$now',
+            'role': 'assistant',
+            'content': message,
+            'intentType': 'error',
+            'effectSummary': 'DJ 请求失败',
+            'clientOrder': now,
+          },
+        ];
+        _sortRadioChatMessages();
+      });
+      _scrollRadioChatToBottom();
     } finally {
       if (mounted) {
         setState(() => _radioChatSending = false);
       }
+    }
+  }
+
+  void _sortRadioChatMessages() {
+    for (var index = 0; index < _radioChatMessages.length; index += 1) {
+      _radioChatMessages[index]['_stableOrder'] ??= index;
+    }
+    _radioChatMessages.sort((a, b) {
+      final aOrder = _chatMessageOrder(a);
+      final bOrder = _chatMessageOrder(b);
+      if (aOrder != bOrder) return aOrder.compareTo(bOrder);
+      final aRole = a['role']?.toString() == 'user' ? 0 : 1;
+      final bRole = b['role']?.toString() == 'user' ? 0 : 1;
+      if (aRole != bRole) return aRole.compareTo(bRole);
+      final aStable = a['_stableOrder'];
+      final bStable = b['_stableOrder'];
+      if (aStable is int && bStable is int && aStable != bStable) {
+        return aStable.compareTo(bStable);
+      }
+      return (a['id']?.toString() ?? '').compareTo(b['id']?.toString() ?? '');
+    });
+  }
+
+  int _chatMessageOrder(Map<String, dynamic> message) {
+    final clientOrder = message['clientOrder'];
+    if (clientOrder is int) return clientOrder;
+    final createdAtText = message['createdAt']?.toString() ??
+        message['created_at']?.toString() ??
+        message['updatedAt']?.toString() ??
+        '';
+    final createdAt = DateTime.tryParse(createdAtText);
+    return createdAt?.millisecondsSinceEpoch ?? 0;
+  }
+
+  Future<void> _playDjSpoken(dynamic spoken) async {
+    if (spoken is! Map) return;
+    if (spoken['status']?.toString() != 'ready') return;
+    final streamUrl = spoken['streamUrl']?.toString() ?? '';
+    if (streamUrl.isEmpty) return;
+    await _musicController.playDuckedNarration(
+      NasMusicApi.resolveServerUrl(streamUrl),
+    );
+  }
+
+  String _djReplyText(String reply, dynamic action) {
+    if (action is! Map) return reply;
+    final type = action['type']?.toString() ?? '';
+    final tracks = action['tracks'];
+    if (tracks is! List || tracks.isEmpty) {
+      final actionMessage = action['message']?.toString().trim() ?? '';
+      if (actionMessage.isEmpty || reply.contains(actionMessage)) return reply;
+      return '$reply\n\n$actionMessage';
+    }
+    final names = tracks
+        .whereType<Map>()
+        .take(3)
+        .map((track) {
+          final title = track['title']?.toString() ??
+              track['name']?.toString() ??
+              track['mainTitle']?.toString() ??
+              '';
+          final artist = track['artist']?.toString() ?? '';
+          return artist.isEmpty ? title : '$title - $artist';
+        })
+        .where((item) => item.isNotEmpty)
+        .toList();
+    if (names.isEmpty) return reply;
+    final actionText = type.isEmpty ? '播放建议' : type;
+    return '$reply\n\n$actionText：${names.join(' / ')}';
+  }
+
+  Future<void> _handleDjAction(dynamic action) async {
+    if (action is! Map) return;
+    final type = action['type']?.toString() ?? 'none';
+    if (type == 'none') return;
+
+    if (type == 'play_episode') {
+      final episode = action['episode'];
+      if (episode is Map) {
+        final normalized = Map<String, dynamic>.from(episode);
+        _upsertRadioEpisode(normalized);
+        await _playRadioEpisode(normalized);
+      }
+      return;
+    }
+
+    if (type == 'play_tracks') {
+      final rawTracks = action['tracks'];
+      if (rawTracks is! List || rawTracks.isEmpty) return;
+      final playlist = _dedupeTracksById(rawTracks
+          .whereType<Map>()
+          .map(
+            (item) => NasMusicApi.normalizeTrack(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .where((track) => (track['id'] ?? '').toString().isNotEmpty)
+          .toList());
+      if (playlist.isEmpty) return;
+      _musicController.suppressPlaylistAutoLoad();
+      _playlistStore.setCurrentPlaylist(playlist, startIndex: 0);
+      _globalPlayerStore.setCurrentTrack(playlist.first);
+      _addPlaybackHistory(playlist.first);
+      await _musicController.initMusicData(playlist.first);
+      return;
+    }
+
+    if (type == 'build_and_play_today') {
+      await _runDailyRadioNow();
     }
   }
 
@@ -290,10 +815,50 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
 
   void _scrollRadioChatToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_radioChatScrollController.hasClients) return;
-      _radioChatScrollController.animateTo(
-        _radioChatScrollController.position.maxScrollExtent,
-        duration: Duration(milliseconds: 220),
+      _animateRadioChatToBottom();
+      Future.delayed(Duration(milliseconds: 80), _animateRadioChatToBottom);
+    });
+  }
+
+  void _animateRadioChatToBottom() {
+    if (!_radioChatScrollController.hasClients) return;
+    _radioChatScrollController.animateTo(
+      _radioChatScrollController.position.maxScrollExtent,
+      duration: Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+    );
+  }
+
+  int _fallbackLyricActiveIndex(int itemCount) {
+    if (itemCount <= 0) return 0;
+    final total = _musicController.totalDuration;
+    if (total > 0) {
+      final progress =
+          (_musicController.currentPosition / total).clamp(0.0, 0.999);
+      return (progress * itemCount).floor().clamp(0, itemCount - 1);
+    }
+    return ((_musicController.currentPosition ~/ 4200) % itemCount)
+        .clamp(0, itemCount - 1);
+  }
+
+  void _scrollFallbackLyricsTo(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_fallbackLyricScrollController.hasClients) return;
+      const itemHeight = 58.0;
+      final viewport =
+          _fallbackLyricScrollController.position.viewportDimension;
+      final target = (index * itemHeight) - viewport / 2 + itemHeight / 2;
+      final clamped = target.clamp(
+        0.0,
+        _fallbackLyricScrollController.position.maxScrollExtent,
+      );
+      if ((_fallbackLyricScrollController.position.pixels - clamped).abs() <
+          8) {
+        return;
+      }
+      _fallbackLyricScrollController.animateTo(
+        clamped,
+        duration: Duration(milliseconds: 260),
         curve: Curves.easeOut,
       );
     });
@@ -320,11 +885,12 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       _radioError = null;
     });
     try {
-      final result = await NasMusicApi.buildDailyRadioMix(trackCount: 3);
+      final result = await NasMusicApi.getDjToday(autoBuild: true);
       final episode = result['episode'];
       if (!mounted) return;
       if (episode is Map) {
         _upsertRadioEpisode(episode);
+        await _playRadioEpisode(Map<String, dynamic>.from(episode));
       }
       await _loadRadioStatus();
       await _loadRadioEpisodes();
@@ -344,11 +910,24 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
       _radioError = null;
     });
     try {
-      final result = await NasMusicApi.buildDailyRadioMix(trackCount: 3);
-      final episode = result['episode'];
+      final result = await NasMusicApi.getDjToday(autoBuild: true);
+      var episode = result['episode'];
       if (!mounted) return;
+      if (result['status']?.toString() == 'error') {
+        setState(() {
+          _dailyRadioStatus = result;
+          _radioError = result['message']?.toString() ?? '今日电台生成失败';
+        });
+        return;
+      }
       if (episode is Map) {
+        final playable = await _ensureVoiceRadioEpisode(
+          Map<String, dynamic>.from(episode),
+        );
+        if (playable == null) return;
+        episode = playable;
         _upsertRadioEpisode(episode);
+        await _playRadioEpisode(Map<String, dynamic>.from(episode));
       }
       await _loadDailyRadioStatus();
       await _loadRadioStatus();
@@ -361,6 +940,71 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
         setState(() => _dailyRadioGenerating = false);
       }
     }
+  }
+
+  bool _radioEpisodeUsesMockTts(Map<String, dynamic> episode) {
+    final generator = episode['generator']?.toString().toLowerCase() ?? '';
+    if (generator.contains('mock-tts')) return true;
+    final segments = episode['segments'];
+    if (segments is! List) return false;
+    return segments.whereType<Map>().any((segment) {
+      final type = segment['type']?.toString() ?? '';
+      if (type == 'track') return false;
+      final format = segment['audioFormat']?.toString().toLowerCase() ?? '';
+      final path = segment['audioPath']?.toString().toLowerCase() ?? '';
+      return format == 'wav' || path.endsWith('.wav');
+    });
+  }
+
+  Future<Map<String, dynamic>?> _ensureVoiceRadioEpisode(
+    Map<String, dynamic> episode,
+  ) async {
+    if (!_radioEpisodeUsesMockTts(episode)) return episode;
+    if (!mounted) return null;
+    setState(() {
+      _radioError = '检测到当前电台还是测试口播，正在检查 Fish 真人语音...';
+    });
+
+    final probe = await NasMusicApi.probeDjTts();
+    if (probe['status']?.toString() != 'ready') {
+      if (!mounted) return null;
+      setState(() {
+        _radioError =
+            probe['message']?.toString() ?? 'Fish TTS 暂不可用，请检查代理后再生成。';
+      });
+      return null;
+    }
+
+    if (!mounted) return null;
+    setState(() {
+      _radioError = 'Fish 真人语音已就绪，正在重新生成今日电台...';
+    });
+    final rebuilt = await NasMusicApi.buildDjEpisode(
+      force: true,
+      message: '重新生成今天的真人口播电台',
+    );
+    if (rebuilt['status']?.toString() == 'error') {
+      if (!mounted) return null;
+      setState(() {
+        _radioError = rebuilt['message']?.toString() ?? '真人口播电台生成失败。';
+      });
+      return null;
+    }
+
+    final radio = rebuilt['radio'];
+    final rebuiltEpisode =
+        radio is Map ? Map<String, dynamic>.from(radio)['episode'] : null;
+    if (rebuiltEpisode is Map) {
+      if (mounted) {
+        setState(() => _radioError = null);
+      }
+      return Map<String, dynamic>.from(rebuiltEpisode);
+    }
+    if (!mounted) return null;
+    setState(() {
+      _radioError = '真人口播已请求生成，但服务端没有返回电台内容。';
+    });
+    return null;
   }
 
   Future<void> _runLibraryScan({required bool incremental}) async {
@@ -577,12 +1221,27 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
   }
 
   Future<void> _playRadioEpisode(Map<String, dynamic> episode) async {
-    final playlist = NasMusicApi.normalizeRadioEpisodePlaylist(episode);
-    if (playlist.isEmpty) return;
+    final playableEpisode = await _ensureVoiceRadioEpisode(episode);
+    if (playableEpisode == null) return;
+    final playlist = _dedupeTracksById(
+      NasMusicApi.normalizeRadioEpisodePlaylist(playableEpisode),
+    );
+    if (playlist.isEmpty) {
+      if (!_dailyRadioGenerating) {
+        setState(() {
+          _radioError = '当前电台缺少分段音频，正在重新生成今日电台...';
+        });
+        await _runDailyRadioNow();
+      }
+      return;
+    }
+    _upsertRadioEpisode(playableEpisode);
     final track = playlist.first;
+    _musicController.suppressPlaylistAutoLoad();
     _playlistStore.setCurrentPlaylist(playlist, startIndex: 0);
     _globalPlayerStore.setCurrentTrack(track);
     await _musicController.initMusicData(track);
+    _musicController.queueAttachedNarrationForTrack(track);
   }
 
   @override
@@ -590,169 +1249,6 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
     return Scaffold(
       backgroundColor: AppColors.appBg,
       body: _buildVerticalDjApp(),
-    );
-  }
-
-  Widget _buildVerticalDjApp() {
-    return _ClaudioParticleField(
-      interactive: true,
-      focusMode: false,
-      lyricPulse: false,
-      child: SafeArea(
-        child: Stack(
-          children: [
-            Positioned(
-              top: 14,
-              right: 14,
-              child: _buildThemeSegment(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVerticalTopBar() {
-    return Container(
-      height: 58,
-      padding: EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: (AppColors.isDark ? Color(0xFF111018) : Colors.white)
-            .withValues(alpha: AppColors.isDark ? 0.78 : 0.9),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.borderColor),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Text(
-                  'Muo',
-                  style: TextStyle(
-                    color: AppColors.primaryBtn,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0,
-                  ),
-                ),
-                SizedBox(width: 8),
-                Text(
-                  'FM',
-                  style: TextStyle(
-                    color: AppColors.primaryText,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _buildVerticalPanelButton('CHAT', _VerticalDjPanel.chat),
-          _buildVerticalPanelButton('ON AIR', _VerticalDjPanel.player),
-          _buildVerticalPanelButton('ME', _VerticalDjPanel.profile),
-          SizedBox(width: 8),
-          _buildThemeSegment(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVerticalPanelButton(String label, _VerticalDjPanel panel) {
-    final active = _verticalPanel == panel;
-    return Padding(
-      padding: EdgeInsets.only(left: 4),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => setState(() => _verticalPanel = panel),
-        child: Container(
-          height: 34,
-          padding: EdgeInsets.symmetric(horizontal: 10),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: active
-                ? AppColors.primaryBtn
-                : Colors.white.withValues(alpha: AppColors.isDark ? 0.06 : 0),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: active ? AppColors.primaryBtn : AppColors.borderColor,
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: active ? Colors.white : AppColors.secondaryText,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.4,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildThemeSegment() {
-    return GetBuilder<ThemeStore>(
-      builder: (themeStore) {
-        return Container(
-          height: 34,
-          padding: EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color:
-                Colors.black.withValues(alpha: AppColors.isDark ? 0.24 : 0.06),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.borderColor),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildThemeChoice(
-                label: 'DARK',
-                active: themeStore.darkMode,
-                onTap: () => themeStore.setDarkMode(true),
-              ),
-              _buildThemeChoice(
-                label: 'LIGHT',
-                active: !themeStore.darkMode,
-                onTap: () => themeStore.setDarkMode(false),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildThemeChoice({
-    required String label,
-    required bool active,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      onTap: onTap,
-      child: Container(
-        height: 26,
-        padding: EdgeInsets.symmetric(horizontal: 9),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: active
-              ? (AppColors.isDark ? Colors.white : Color(0xFF111111))
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: active
-                ? (AppColors.isDark ? Color(0xFF111111) : Colors.white)
-                : AppColors.secondaryText,
-            fontSize: 9,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-      ),
     );
   }
 
@@ -960,7 +1456,8 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
               controller: _radioChatController,
               minLines: 1,
               maxLines: 3,
-              onSubmitted: (_) => _sendRadioChat(),
+              inputFormatters: _radioChatInputFormatters,
+              onSubmitted: _sendRadioChat,
               style: TextStyle(color: AppColors.primaryText, fontSize: 13),
               decoration: InputDecoration(
                 border: InputBorder.none,
@@ -1579,12 +2076,14 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
               () {
                 final activeIndex = lyrics.isNotEmpty
                     ? _musicController.currentLyricIndex
-                    : ((_musicController.currentPosition ~/ 4200) %
-                        math.max(1, itemCount));
+                    : _fallbackLyricActiveIndex(itemCount);
+                if (lyrics.isEmpty) {
+                  _scrollFallbackLyricsTo(activeIndex);
+                }
                 return ListView.builder(
                   controller: lyrics.isNotEmpty
                       ? _musicController.lyricScrollController
-                      : null,
+                      : _fallbackLyricScrollController,
                   padding: EdgeInsets.zero,
                   itemCount: itemCount,
                   itemBuilder: (context, index) {
@@ -1597,16 +2096,12 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
                       margin: EdgeInsets.only(bottom: 10),
                       padding:
                           EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: active
-                            ? AppColors.primaryBtn.withValues(alpha: 0.16)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
+                      decoration: BoxDecoration(color: Colors.transparent),
                       child: Text(
                         text,
                         style: TextStyle(
-                          color: active ? Color(0xFF111111) : Color(0xFFB3AFA7),
+                          color:
+                              active ? AppColors.primaryBtn : Color(0xFFB3AFA7),
                           fontSize: active ? 17 : 15,
                           height: 1.35,
                           fontWeight:
@@ -2369,7 +2864,8 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
                   controller: _radioChatController,
                   minLines: 1,
                   maxLines: 3,
-                  onSubmitted: (_) => _sendRadioChat(),
+                  inputFormatters: _radioChatInputFormatters,
+                  onSubmitted: _sendRadioChat,
                   style: TextStyle(color: Colors.white, fontSize: 13),
                   decoration: InputDecoration(
                     border: InputBorder.none,
@@ -2571,7 +3067,8 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
               controller: _radioChatController,
               minLines: 1,
               maxLines: 3,
-              onSubmitted: (_) => _sendRadioChat(),
+              inputFormatters: _radioChatInputFormatters,
+              onSubmitted: _sendRadioChat,
               style: TextStyle(color: AppColors.primaryText, fontSize: 13),
               decoration: InputDecoration(
                 border: InputBorder.none,

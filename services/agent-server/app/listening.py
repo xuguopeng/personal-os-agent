@@ -11,13 +11,12 @@ from pathlib import Path
 from sqlite3 import Connection
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .db import db
-from .music import daoliyu_base_urls, fetch_recent_playback_tracks, get_or_login_daoliyu_token
+from .music import fetch_recent_playback_tracks
 from .repository import row_to_dict
 
 router = APIRouter(prefix="/v1/listening", tags=["listening"])
@@ -272,8 +271,6 @@ async def sync_single_source(source: dict[str, Any], limit: int) -> dict[str, An
 
 async def collect_daoliyu_events(limit: int) -> list[dict[str, Any]]:
     tracks = await fetch_recent_playback_tracks(limit)
-    if len(tracks) < min(limit, 50):
-        tracks.extend(await fetch_daoliyu_tracks(limit))
     deduped: dict[str, dict[str, Any]] = {}
     for track in tracks:
         event = daoliyu_track_to_event(track)
@@ -281,28 +278,6 @@ async def collect_daoliyu_events(limit: int) -> list[dict[str, Any]]:
         if key not in deduped:
             deduped[key] = event
     return list(deduped.values())[:limit]
-
-
-async def fetch_daoliyu_tracks(limit: int) -> list[dict[str, Any]]:
-    token = await get_or_login_daoliyu_token()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-        for base_url in daoliyu_base_urls():
-            try:
-                response = await client.get(
-                    f"{base_url}/api/tracks",
-                    params={"limit": limit, "offset": 0},
-                    headers=headers,
-                )
-            except httpx.HTTPError:
-                continue
-            if response.status_code >= 400:
-                continue
-            payload = response.json()
-            items = payload.get("items") if isinstance(payload, dict) else payload
-            if isinstance(items, list):
-                return [item for item in items if isinstance(item, dict)]
-    return []
 
 
 def daoliyu_track_to_event(track: dict[str, Any]) -> dict[str, Any]:

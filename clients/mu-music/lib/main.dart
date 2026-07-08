@@ -15,6 +15,7 @@ import 'package:get_storage/get_storage.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  await ClientConfig.load();
   await GetStorage.init();
   Get.put(UserStore());
   Get.put(TokenStore());

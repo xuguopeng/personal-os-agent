@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import re
 import threading
@@ -164,19 +165,22 @@ def list_tracks(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     keyword: str = "",
+    query: str = "",
+    q: str = "",
 ) -> dict[str, Any]:
     where = ""
     params: list[Any] = []
-    trimmed = keyword.strip()
+    trimmed = (keyword or query or q).strip()
     if trimmed:
         where = """
         WHERE title LIKE ?
            OR artist LIKE ?
            OR album LIKE ?
            OR file_name LIKE ?
+           OR source_path LIKE ?
         """
         pattern = f"%{trimmed}%"
-        params.extend([pattern, pattern, pattern, pattern])
+        params.extend([pattern, pattern, pattern, pattern, pattern])
     with db() as conn:
         total = conn.execute(
             f"SELECT count(*) FROM music_tracks {where}",
@@ -754,6 +758,40 @@ def stream_local_audio(track_id: str, request: Request) -> Response:
     return ranged_file_response(path, request)
 
 
+@router.get("/radio/episodes/{episode_id}/stream")
+def stream_radio_episode(episode_id: str, request: Request) -> Response:
+    episode = find_radio_episode(episode_id)
+    if episode is None:
+        return not_found("没有找到这个电台节目。")
+    return stream_radio_audio_path(episode["audio_path"], request, "电台音频文件不存在。")
+
+
+@router.get("/radio/episodes/{episode_id}/outro/stream")
+def stream_radio_episode_outro(episode_id: str, request: Request) -> Response:
+    episode = find_radio_episode(episode_id)
+    if episode is None:
+        return not_found("没有找到这个电台节目。")
+    return stream_radio_audio_path(episode["outro_audio_path"], request, "电台收尾音频文件不存在。")
+
+
+@router.get("/radio/episodes/{episode_id}/segments/{segment_id}/stream")
+def stream_radio_episode_segment(episode_id: str, segment_id: str, request: Request) -> Response:
+    episode = find_radio_episode(episode_id)
+    if episode is None:
+        return not_found("没有找到这个电台节目。")
+    segments = parse_json_list(episode["segments_json"])
+    segment = next(
+        (
+            item for item in segments
+            if isinstance(item, dict) and str(item.get("id") or "") == segment_id
+        ),
+        None,
+    )
+    if segment is None:
+        return not_found("没有找到这个电台片段。")
+    return stream_radio_audio_path(segment.get("audioPath"), request, "电台片段音频文件不存在。")
+
+
 @router.get("/covers/{track_id}")
 def stream_cover(track_id: str) -> Response:
     row = find_track_row(track_id)
@@ -1167,7 +1205,8 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
                     upsert_track(conn, track)
                     imported += 1
                 except Exception as error:  # noqa: BLE001 - one bad file should not stop scan
-                    errors.append({"path": normalized_path, "message": str(error)})
+                    message = str(error).strip() or type(error).__name__
+                    errors.append({"path": normalized_path, "message": message})
                 update_scan_state(
                     {
                         "imported": imported,
@@ -1423,8 +1462,14 @@ def upsert_track(conn: Any, track: dict[str, Any]) -> None:
             disc_number = excluded.disc_number,
             year = excluded.year,
             genre = excluded.genre,
-            lyrics = excluded.lyrics,
-            cover_path = excluded.cover_path,
+            lyrics = CASE
+                WHEN excluded.lyrics != '' THEN excluded.lyrics
+                ELSE music_tracks.lyrics
+            END,
+            cover_path = CASE
+                WHEN excluded.cover_path != '' THEN excluded.cover_path
+                ELSE music_tracks.cover_path
+            END,
             file_format = excluded.file_format,
             file_size = excluded.file_size,
             file_mtime = excluded.file_mtime,
@@ -1468,8 +1513,10 @@ def track_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "albumId": album_id,
         "durationSeconds": row["duration_seconds"],
         "dt": int(row["duration_seconds"] or 0) * 1000,
+        "fileName": row["file_name"],
         "fileFormat": row["file_format"],
         "filePath": row["source_path"],
+        "sourcePath": row["source_path"],
         "fileSize": row["file_size"],
         "year": row["year"],
         "genre": row["genre"],
@@ -1777,6 +1824,39 @@ def parse_range_header(value: str, file_size: int) -> tuple[int, int] | None:
     if start < 0 or end < start or start >= file_size:
         return None
     return start, min(end, file_size - 1)
+
+
+def find_radio_episode(episode_id: str):
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM music_radio_episodes WHERE id = ?",
+            (episode_id,),
+        ).fetchone()
+
+
+def parse_json_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def stream_radio_audio_path(value: Any, request: Request, missing_message: str) -> Response:
+    audio_path = Path(str(value or ""))
+    output_root = Path(get_settings().radio_output_dir).resolve()
+    try:
+        audio_path.resolve().relative_to(output_root)
+    except (ValueError, RuntimeError):
+        return JSONResponse(
+            status_code=403,
+            content={"status": "error", "message": "电台音频路径不在允许目录。"},
+        )
+    if not audio_path.exists() or not audio_path.is_file():
+        return not_found(missing_message)
+    return ranged_file_response(audio_path, request)
 
 
 def not_found(message: str) -> JSONResponse:
