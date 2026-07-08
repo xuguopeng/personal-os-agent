@@ -1,5 +1,14 @@
 # Operate Log
 
+## 2026-07-08
+
+- sqmusic 自动下载选择器升级：缺歌下载不再按插件顺序直接取第一批结果，改为跨 `kw/qq/netease/kg/mg` 汇总候选后统一评分，优先原专辑、精确歌名、歌手匹配和可用高音质。
+- 下载候选降权规则补全：演唱会、现场、DJ、Remix、伴奏、纯音乐、器乐、翻唱、铃声、精选/合集/Best Hits/KTV/周年精选/黄金年代等版本会降到阈值以下，避免误下非原曲版本。
+- 下载音质选择优化：同一首候选支持按偏好音质排序重试，优先 FLAC，失败后可降级到 320/128；如果原专辑音源异步失败，不会自动跳到演唱会或精选版本。
+- 真实下载验证：已调用 sqmusic 下载 Beyond《真的爱你》（`BEYOND IV (超越时代2CD纪念版)`）、《喜欢你》（`BEYOND秘密警察 (超越时代纪念版)`）和《海阔天空》（优先 QQ `乐与怒` 失败后，用 kw `乐与怒` 兜底），并执行 NAS 增量扫描。
+- 播放验证：`海阔天空` 已进入曲库，路径为 `/data/media/sqmusic/BEYOND/乐与怒/海阔天空 - BEYOND.flac`，`/v1/music/audio/{id}` Range 请求返回 `206 Partial Content`。
+- 线上《后来》重下处理：确认旧曲库记录的音频流已返回 404 后，先用全量扫描清理 stale 记录；随后重新调用 sqmusic 下载《后来 / 刘若英》，命中 `kw / 2020 刘若英陪你 献上录音专辑 / KW_FLAC_2000`，任务 `id=180` 下载成功；再执行增量扫描导入 1 首，曲库重新出现 `/data/media/sqmusic/刘若英/2020 刘若英陪你 献上录音专辑/后来 - 刘若英.flac`，音频 Range 请求返回 `206 Partial Content`。
+
 ## 2026-07-02
 
 - 当前方向切回全栈项目：确认不修改 `~/Documents/徐郭鹏项目/徐-音乐播放器/mu-music`，继续以当前 Tauri/React 全栈项目作为 Personal OS Agent 总控台。
@@ -276,3 +285,11 @@
 - Flutter 口播延迟到首次暂停的根因修复：确认 `GlobalMusicController.loadMusic()` 中 `await _audioPlayer.play()` 会一直等到主音乐被暂停/结束后才继续执行，导致排队 Migi 文案口播的代码在“第一次暂停”后才运行。主音乐播放现在改为非阻塞 `_startAudioPlayback()`，并把口播挂起到主播放器 `ready + playing` 状态后触发；切换播放、上一首/下一首中的 `_audioPlayer.play()` 也改为非阻塞启动，避免播放流程卡住后续逻辑。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；本轮按要求未打包 macOS。
 
 - Fish Audio 口播音色切换：已将 Migi 默认 Fish `FISH_TTS_REFERENCE_ID` 从旧男声切换为用户试听确认的中文口播音色 `c43ae8e1c3664eac9203f9293fabc3c9`，同步更新 `docker-compose.yml`、服务端默认配置和 README 示例；真实 Fish API key 仍只从 secret env 读取，不写入仓库。验证：`python3 -m py_compile services/agent-server/app/*.py`、`ruby YAML.load_file("docker-compose.yml")` 通过；本轮按要求未打包 macOS。
+
+- NAS 下载歌曲读不到修复：线上 `v0.4.1` 增量扫描可见 `/data/media/daoliyu`、`/data/media/sqmusic`、`/data/media/local` 三个根目录，说明挂载正常；但扫描 382 个音频时只有 22 首跳过、361 首导入失败，失败类型均为 `ValueError`，导致已下载的《后来》没有进入 `music_tracks`，客户端搜索自然读不到。本轮将元数据解析失败改为降级入库：Mutagen 读取时长异常、返回 `NaN`/无穷大/异常字符串时降级为 0 秒；标签读取失败时仍按文件名、路径、文件大小和修改时间生成可播放记录。另修复 `刘若英-后来.flac` 这类 sqmusic 文件名兜底解析，确保歌手为“刘若英”、歌名为“后来”，不会被父目录名干扰；服务版本提升到 `v0.4.2`。验证：`python3 -m py_compile services/agent-server/app/*.py`、`ruby YAML.load_file("docker-compose.yml")` 通过；Python 3.13 临时 venv 下 `python -m unittest discover -s services/agent-server/tests -v` 通过。
+
+- 文档补充 0029 中转入口：根 README、服务端 README 和 data README 中的 0029 文案/配置说明已补充入口链接 `https://www.0029.org/?promo=AFF1K9`，方便后续查看和配置 OpenAI 兼容中转；未修改任何密钥或运行时配置。
+
+- NAS 扫描报告语义修正：线上 `v0.4.2` 验证通过，增量扫描后曲库从 22 首变为 382 首，`/v1/music/api/tracks?keyword=后来` 已能返回《后来 - 刘若英》，音频流 `/v1/music/audio/51276ab09eb94ce85edae9b5` 返回 `206 Partial Content`，说明下载文件已可播放；但降级导入成功的文件仍计入 `errorCount`，扫描报告看起来像失败。本轮将“元数据读取失败但已按文件名导入”的记录移到 `fallbacks/fallbackCount`，真正导入失败才进入 `errors/errorCount`，服务版本提升到 `v0.4.3`。
+
+- Flutter 客户端正式命名和 release 打包：应用展示名改为 `Migi`，macOS/Android/iOS/Web 图标使用新的 Migi 图标资源，macOS bundle id 与 Android application id 统一为 `com.xuguopeng.migi`。验证：`flutter analyze --no-fatal-infos --no-fatal-warnings` 通过；`flutter build macos --release` 成功生成 `clients/mu-music/build/macos/Build/Products/Release/Migi.app`；`flutter build apk --release` 成功生成 `clients/mu-music/build/app/outputs/flutter-apk/app-release.apk`；并额外整理 `clients/mu-music/build/distribution/Migi-macos-release.zip` 和 `clients/mu-music/build/distribution/Migi-android-release.apk` 方便安装分发。

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import mimetypes
 import re
 import threading
@@ -41,6 +42,7 @@ SCAN_STATE: dict[str, Any] = {
     "scanned": 0,
     "imported": 0,
     "skipped": 0,
+    "fallbackCount": 0,
     "errorCount": 0,
     "cancelRequested": False,
     "result": None,
@@ -1149,6 +1151,8 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
     scanned = 0
     imported = 0
     skipped = 0
+    fallback_count = 0
+    fallbacks: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
     seen_paths: set[str] = set()
     with db() as conn:
@@ -1165,6 +1169,8 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
                         "scanned": scanned,
                         "imported": imported,
                         "skipped": skipped,
+                        "fallbackCount": fallback_count,
+                        "fallbacks": fallbacks[:50],
                         "errors": errors[:50],
                         "errorCount": len(errors),
                         "durationSeconds": round(time.monotonic() - started, 3),
@@ -1182,6 +1188,7 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
                         "scanned": scanned,
                         "imported": imported,
                         "skipped": skipped,
+                        "fallbackCount": fallback_count,
                         "errorCount": len(errors),
                     }
                 )
@@ -1206,11 +1213,19 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
                     imported += 1
                 except Exception as error:  # noqa: BLE001 - one bad file should not stop scan
                     message = str(error).strip() or type(error).__name__
-                    errors.append({"path": normalized_path, "message": message})
+                    try:
+                        upsert_track(conn, fallback_track_metadata(path))
+                        imported += 1
+                        fallback_count += 1
+                        fallbacks.append({"path": normalized_path, "message": f"元数据读取失败，已按文件名导入：{message}"})
+                    except Exception as fallback_error:  # noqa: BLE001 - keep scanning other files
+                        fallback_message = str(fallback_error).strip() or type(fallback_error).__name__
+                        errors.append({"path": normalized_path, "message": f"{message}; fallback failed: {fallback_message}"})
                 update_scan_state(
                     {
                         "imported": imported,
                         "skipped": skipped,
+                        "fallbackCount": fallback_count,
                         "errorCount": len(errors),
                     }
                 )
@@ -1228,6 +1243,8 @@ def scan_local_music_library(incremental: bool, already_marked: bool = False) ->
         "scanned": scanned,
         "imported": imported,
         "skipped": skipped,
+        "fallbackCount": fallback_count,
+        "fallbacks": fallbacks[:50],
         "errors": errors[:50],
         "errorCount": len(errors),
         "durationSeconds": round(time.monotonic() - started, 3),
@@ -1248,6 +1265,7 @@ def mark_scan_started(mode: str) -> None:
             "scanned": 0,
             "imported": 0,
             "skipped": 0,
+            "fallbackCount": 0,
             "errorCount": 0,
             "cancelRequested": False,
             "result": None,
@@ -1266,6 +1284,7 @@ def mark_scan_finished(result: dict[str, Any]) -> None:
             "scanned": result.get("scanned", 0),
             "imported": result.get("imported", 0),
             "skipped": result.get("skipped", 0),
+            "fallbackCount": result.get("fallbackCount", 0),
             "errorCount": result.get("errorCount", 0),
             "cancelRequested": False,
             "result": result,
@@ -1371,7 +1390,7 @@ def read_track_metadata(path: Path, cover_dir: Path) -> dict[str, Any]:
     stat = path.stat()
     audio = safe_mutagen_file(path)
     tags = getattr(audio, "tags", None)
-    duration = int(getattr(getattr(audio, "info", None), "length", 0) or 0)
+    duration = safe_duration_seconds(audio)
     fallback = fallback_metadata_from_path(path)
     title = first_tag(tags, "title", "TIT2", "\xa9nam") or fallback["title"]
     artist = first_tag(tags, "artist", "TPE1", "\xa9ART") or fallback["artist"]
@@ -1394,6 +1413,30 @@ def read_track_metadata(path: Path, cover_dir: Path) -> dict[str, Any]:
         "genre": clean_text(first_tag(tags, "genre", "TCON", "\xa9gen")),
         "lyrics": str(lyrics or "").strip(),
         "cover_path": cover_path,
+        "file_format": path.suffix.lower().lstrip("."),
+        "file_size": stat.st_size,
+        "file_mtime": stat.st_mtime,
+    }
+
+
+def fallback_track_metadata(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    fallback = fallback_metadata_from_path(path)
+    return {
+        "id": stable_track_id(path),
+        "source_path": str(path.resolve()),
+        "file_name": path.name,
+        "title": clean_text(fallback["title"]),
+        "artist": clean_text(fallback["artist"]),
+        "album": clean_text(fallback["album"]),
+        "album_artist": "",
+        "duration_seconds": 0,
+        "track_number": 0,
+        "disc_number": 0,
+        "year": "",
+        "genre": "",
+        "lyrics": read_sidecar_lyrics(path),
+        "cover_path": "",
         "file_format": path.suffix.lower().lstrip("."),
         "file_size": stat.st_size,
         "file_mtime": stat.st_mtime,
@@ -1434,7 +1477,7 @@ def fallback_metadata_from_path(path: Path) -> dict[str, str]:
             title, artist = left, right
     elif "-" in title:
         left, right = [part.strip() for part in title.split("-", 1)]
-        if left and right and artist == "未知歌手":
+        if left and right:
             artist, title = left, right
     return {
         "title": title or "未知歌曲",
@@ -1695,6 +1738,17 @@ def parse_lrc_lines(raw: str) -> list[dict[str, Any]]:
 def parse_number(value: Any) -> int:
     match = re.search(r"\d+", str(value or ""))
     return int(match.group(0)) if match else 0
+
+
+def safe_duration_seconds(audio: Any) -> int:
+    raw_duration = getattr(getattr(audio, "info", None), "length", 0)
+    try:
+        duration = float(raw_duration or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(duration):
+        return 0
+    return max(0, int(duration))
 
 
 def extract_cover(path: Path, audio: Any, cover_dir: Path) -> str:

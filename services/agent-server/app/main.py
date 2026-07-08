@@ -14,7 +14,7 @@ from .metadata_scrape import router as metadata_scrape_router
 from .sqmusic_download import router as sqmusic_download_router
 from .dj import router as dj_router
 
-APP_VERSION = "v0.4.1"
+APP_VERSION = "v0.4.3"
 
 app = FastAPI(title="Personal OS Agent Server", version=APP_VERSION)
 app.add_middleware(

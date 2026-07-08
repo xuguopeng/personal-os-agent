@@ -3,7 +3,7 @@
  * @Date: 2025-09-12 07:40:48
  * @LastEditTime: 2025-10-10 14:01:51
  * @FilePath: /mu-music/lib/main.dart
- * @Description: 沐音APP - 入口文件
+ * @Description: Migi - 入口文件
  * 在这个虚拟的空间里，我试图捕捉真实的自我，与世界分享。
  */
 import 'package:flutter/material.dart';
@@ -41,7 +41,7 @@ class _MyAppState extends State<MyApp> {
     return GetBuilder<ThemeStore>(
       builder: (themeStore) {
         return GetMaterialApp(
-          title: '沐音',
+          title: 'Migi',
           theme: ThemeData(
             brightness:
                 themeStore.darkMode ? Brightness.dark : Brightness.light,

@@ -1,4 +1,4 @@
-package com.example.mu_music
+package com.xuguopeng.migi
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine

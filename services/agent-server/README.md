@@ -47,7 +47,7 @@ Environment variables:
 - `MUSIC_LIBRARY_ROOTS`: comma-separated local music folders scanned by the built-in NAS music service. Default `/data/media`.
 - `MUSIC_COVER_DIR`: extracted embedded cover cache. Default `/data/covers`.
 - `LLM_PROVIDER`: text-generation provider label. Default `0029`.
-- `OPENAI_COMPAT_BASE_URL`: OpenAI-compatible gateway base URL. Default `https://api.0029.org/v1`.
+- `OPENAI_COMPAT_BASE_URL`: OpenAI-compatible gateway base URL. Default `https://api.0029.org/v1`. Gateway site: [0029](https://www.0029.org/?promo=AFF1K9).
 - `OPENAI_COMPAT_API_KEY`: 0029 API key for `/v1/responses` chat, DJ planning, and radio copywriting. Do not commit this value.
 - `OPENAI_COMPAT_MODEL`: model name routed through 0029. Default `gpt-5.5`.
 - `TTS_PROVIDER`: spoken-segment provider. Default `fish`.

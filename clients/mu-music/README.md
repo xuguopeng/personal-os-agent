@@ -1,4 +1,4 @@
-# mu_music
+# Migi
 
 A new Flutter project.
 

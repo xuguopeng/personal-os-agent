@@ -67,9 +67,10 @@ MISSING_DOWNLOAD_INTERVAL_HOURS=2
 MISSING_DOWNLOAD_BATCH_SIZE=20
 ```
 
-`OPENAI_COMPAT_API_KEY` is the 0029 OpenAI-compatible gateway key. `FISH_API_KEY`
-is used by Fish Audio for spoken DJ segments. Do not put either real key in
-git-tracked files or `docker-compose.yml`.
+`OPENAI_COMPAT_API_KEY` is the [0029](https://www.0029.org/?promo=AFF1K9)
+OpenAI-compatible gateway key. `FISH_API_KEY` is used by Fish Audio for spoken
+DJ segments. Do not put either real key in git-tracked files or
+`docker-compose.yml`.
 
 If Fish Audio is not configured, the service still creates a playable local test
 audio file so the desktop and mobile playback flow can be verified.

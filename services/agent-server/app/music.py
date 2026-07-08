@@ -1680,10 +1680,12 @@ def find_local_track_for_radio(title: str, artist: str) -> dict[str, Any] | None
 
 
 def download_recommended_track(title: str, artist: str) -> dict[str, Any]:
-    from .sqmusic_download import choose_br_type, normalize_track_record, sqmusic_request
+    from .sqmusic_download import normalize_track_record, split_csv, sqmusic_request
 
     keyword = f"{title} {artist}".strip()
     settings = get_settings()
+    candidates: list[dict[str, Any]] = []
+    last_failed_download: dict[str, Any] | None = None
     for plug_name in [item.strip() for item in settings.sqmusic_plug_names.split(",") if item.strip()]:
         try:
             payload = sqmusic_request(
@@ -1692,7 +1694,7 @@ def download_recommended_track(title: str, artist: str) -> dict[str, Any]:
                 params={
                     "plugName": plug_name,
                     "keyword": keyword,
-                    "pageSize": "5",
+                    "pageSize": "60",
                     "pageIndex": "1",
                 },
             )
@@ -1701,44 +1703,61 @@ def download_recommended_track(title: str, artist: str) -> dict[str, Any]:
         if payload.get("code") != 200:
             continue
         records = ((payload.get("data") or {}).get("records") or [])
-        candidates = [normalize_track_record(record) for record in records if isinstance(record, dict)]
-        candidates = sorted(
-            candidates,
-            key=lambda item: score_download_candidate(title, artist, item),
-            reverse=True,
-        )
-        if not candidates:
-            continue
-        candidate = candidates[0]
+        candidates.extend(normalize_track_record(record) for record in records if isinstance(record, dict))
+    candidates = sorted(
+        candidates,
+        key=lambda item: score_download_candidate(title, artist, item),
+        reverse=True,
+    )
+    for candidate in candidates:
         if score_download_candidate(title, artist, candidate) < 0.65:
+            break
+        br_types = ordered_download_br_types(candidate.get("brTypes") or [], split_csv(settings.sqmusic_preferred_br_types))
+        if not br_types:
             continue
-        br_type = choose_br_type(candidate.get("brTypes") or [])
-        if not br_type:
+        last_response: dict[str, Any] | None = None
+        for br_type in br_types:
+            body = {
+                "id": candidate["id"],
+                "plugName": candidate["plugName"],
+                "name": candidate["name"],
+                "artistName": candidate.get("artistNames") or [candidate.get("artistName", "")],
+                "artistids": candidate.get("artistids") or [],
+                "albumName": candidate.get("albumName") or "",
+                "albumid": candidate.get("albumid") or "",
+                "duration": candidate.get("duration") or "",
+                "pic": candidate.get("pic") or "",
+                "lyric": candidate.get("lyric"),
+                "lyricId": candidate.get("lyricId"),
+                "brTypes": candidate.get("brTypes") or [],
+                "dataInfo": candidate.get("dataInfo") or {},
+                "brType": br_type,
+            }
+            response = sqmusic_request("POST", "/api/download/downloadSong", body=body)
+            last_response = response
+            if response.get("code") == 200:
+                return {
+                    "status": "queued",
+                    "track": candidate,
+                    "brType": br_type,
+                    "sqmusic": response,
+                }
+            last_failed_download = {
+                "status": "error",
+                "track": candidate,
+                "brType": br_type,
+                "sqmusic": response,
+            }
+        if last_response:
             continue
-        body = {
-            "id": candidate["id"],
-            "plugName": candidate["plugName"],
-            "name": candidate["name"],
-            "artistName": candidate.get("artistNames") or [candidate.get("artistName", "")],
-            "artistids": candidate.get("artistids") or [],
-            "albumName": candidate.get("albumName") or "",
-            "albumid": candidate.get("albumid") or "",
-            "duration": candidate.get("duration") or "",
-            "pic": candidate.get("pic") or "",
-            "lyric": candidate.get("lyric"),
-            "lyricId": candidate.get("lyricId"),
-            "brTypes": candidate.get("brTypes") or [],
-            "dataInfo": candidate.get("dataInfo") or {},
-            "brType": br_type,
-        }
-        response = sqmusic_request("POST", "/api/download/downloadSong", body=body)
-        return {
-            "status": "queued" if response.get("code") == 200 else "error",
-            "track": candidate,
-            "brType": br_type,
-            "sqmusic": response,
-        }
-    return {"status": "not_found", "title": title, "artist": artist}
+    return last_failed_download or {"status": "not_found", "title": title, "artist": artist}
+
+
+def ordered_download_br_types(br_types: list[Any], preferred: list[str]) -> list[str]:
+    available = [str(item) for item in br_types if str(item).strip()]
+    ordered = [item for item in preferred if item in available]
+    ordered.extend(item for item in available if item not in ordered)
+    return ordered
 
 
 def score_download_candidate(title: str, artist: str, item: dict[str, Any]) -> float:
@@ -1746,16 +1765,164 @@ def score_download_candidate(title: str, artist: str, item: dict[str, Any]) -> f
     query_artist = normalize_radio_text(artist)
     item_title = normalize_radio_text(item.get("name"))
     item_artist = normalize_radio_text(item.get("artistName"))
+    item_text = download_candidate_search_text(item)
+    data_info = item.get("dataInfo") if isinstance(item.get("dataInfo"), dict) else {}
     score = 0.0
     if query_title and query_title == item_title:
         score += 0.75
     elif query_title and (query_title in item_title or item_title in query_title):
         score += 0.45
-    if query_artist and query_artist in item_artist:
+    if query_artist and query_artist == item_artist:
         score += 0.25
-    if any(word in item_title for word in ("live", "演唱会", "dj", "remix", "伴奏", "cover")):
-        score -= 0.1
+    elif query_artist and query_artist in item_artist:
+        score += 0.16
+    elif query_artist:
+        score -= 0.45
+    if download_candidate_has_album(item):
+        score += 0.18
+    else:
+        score -= 0.22
+    if str(item.get("albumName") or "").strip():
+        score += 0.1
+    if str(data_info.get("originalsongtype") or "").strip() == "1":
+        score += 0.16
+    if download_candidate_has_title_variant(query_title, item):
+        score -= 0.55
+    if download_candidate_is_non_studio_version(item_text):
+        score -= 0.75
+    if download_candidate_is_compilation_or_cover_album(item):
+        score -= 0.7
     return score
+
+
+def download_candidate_has_album(item: dict[str, Any]) -> bool:
+    data_info = item.get("dataInfo") if isinstance(item.get("dataInfo"), dict) else {}
+    album_id = str(item.get("albumid") or data_info.get("albumid") or "").strip()
+    return bool(album_id and album_id != "0")
+
+
+def download_candidate_search_text(item: dict[str, Any]) -> str:
+    data_info = item.get("dataInfo") if isinstance(item.get("dataInfo"), dict) else {}
+    parts = [
+        item.get("name"),
+        item.get("albumName"),
+        item.get("artistName"),
+        data_info.get("songname"),
+        data_info.get("album"),
+    ]
+    return normalize_radio_text(" ".join(str(part or "") for part in parts))
+
+
+def download_candidate_has_title_variant(query_title: str, item: dict[str, Any]) -> bool:
+    if not query_title:
+        return False
+    data_info = item.get("dataInfo") if isinstance(item.get("dataInfo"), dict) else {}
+    titles = [
+        normalize_radio_text(item.get("name")),
+        normalize_radio_text(data_info.get("songname")),
+    ]
+    return any(query_title in candidate and candidate != query_title for candidate in titles if candidate)
+
+
+def download_candidate_is_non_studio_version(text: str) -> bool:
+    return any(
+        keyword in text
+        for keyword in (
+            "live",
+            "concert",
+            "version",
+            "acoustic",
+            "unplugged",
+            "演唱会",
+            "现场",
+            "现场版",
+            "巡回",
+            "巡演",
+            "不插电",
+            "dj",
+            "remix",
+            "伴奏",
+            "伴奏版",
+            "纯音乐",
+            "钢琴",
+            "器乐",
+            "品味lp",
+            "piano",
+            "instrumental",
+            "翻唱",
+            "cover",
+            "串烧",
+            "试听",
+            "铃声",
+            "chunk",
+            "edit",
+            "电影",
+            "电视剧",
+            "插曲",
+            "主题曲",
+            "片尾曲",
+            "片头曲",
+            "宣传曲",
+            "ost",
+            "ot",
+            "faraway",
+            "kenyaversion",
+        )
+    )
+
+
+def download_candidate_is_compilation_or_cover_album(item: dict[str, Any]) -> bool:
+    data_info = item.get("dataInfo") if isinstance(item.get("dataInfo"), dict) else {}
+    album_text = normalize_radio_text(
+        " ".join(
+            str(part or "")
+            for part in (
+                item.get("albumName"),
+                data_info.get("album"),
+                data_info.get("subtitle"),
+            )
+        )
+    )
+    return any(
+        keyword in album_text
+        for keyword in (
+            "ktv",
+            "必点",
+            "必唱",
+            "怀旧",
+            "经典",
+            "经典再回首",
+            "精选",
+            "周年精选",
+            "精选情歌",
+            "珍藏",
+            "大全",
+            "音乐大全",
+            "合集",
+            "合辑",
+            "金曲",
+            "黄金年代",
+            "浓情港风",
+            "回忆杀",
+            "chinesepop",
+            "pop90s",
+            "真情实感",
+            "best",
+            "hits",
+            "bestsound",
+            "besthits",
+            "牵手连心",
+            "光辉岁月十五年",
+            "十五年",
+            "极品天碟",
+            "绝对精彩",
+            "collection",
+            "compilation",
+            "anniversary",
+            "101",
+            "vol",
+        )
+    )
 
 
 def dedupe_radio_tracks(tracks: list[dict[str, Any]]) -> list[dict[str, Any]]:

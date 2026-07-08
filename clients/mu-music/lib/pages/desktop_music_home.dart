@@ -2225,7 +2225,7 @@ class _DesktopMusicHomeState extends State<DesktopMusicHome> {
               padding: EdgeInsets.fromLTRB(28, 46, 18, 16),
               children: [
                 Text(
-                  '沐音',
+                  'Migi',
                   style: TextStyle(
                     color: AppColors.primaryBtn,
                     fontSize: 26,

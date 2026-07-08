@@ -43,7 +43,7 @@
 
 ### AI 与语音
 
-- 文案生成使用 OpenAI 兼容接口，当前默认接入 `0029` 中转。
+- 文案生成使用 OpenAI 兼容接口，当前默认接入 [0029 中转](https://www.0029.org/?promo=AFF1K9)。
 - 口播语音使用 Fish Audio，当前默认模型为 `s2.1-pro-free`。
 - 默认 Migi 声音 ID：`c43ae8e1c3664eac9203f9293fabc3c9`。
 - 真实 API Key 只放在 NAS 数据卷的 secret env 文件中，不提交到仓库。
